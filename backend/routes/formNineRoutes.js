@@ -1,20 +1,39 @@
 import express from "express";
-import { createFormNine, updateFormNine, getFormNineByUser } from "../controllers/formNineController.js";
-import upload from "../utils/fileUpload.js"; // Import the file upload middleware
+import { createFormNine, updateFormNine, getFormNineByProcess } from "../controllers/formNineController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
+import upload from "../utils/fileUpload.js";
 
 const router = express.Router();
 
-// Route to create Form Nine
-router.post("/", upload.fields([
-  { name: "mainRoomPhotos", maxCount: 5 }, // Allow up to 5 photos
-]), createFormNine);
+// Create Form Nine (surveyor only)
+router.post(
+  "/",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "mainRoomPhotos", maxCount: 5 },
+  ]),
+  createFormNine
+);
 
-// Route to update Form Nine
-router.put("/:id", upload.fields([
-  { name: "mainRoomPhotos", maxCount: 5 },
-]), updateFormNine);
+// Get Form Nine (all roles can view)
+router.get(
+  "/",
+  verifyToken,
+  restrictTo("admin", "manager", "surveyor", "viewer"),
+  getFormNineByProcess
+);
 
-// Route to get Form Nine by userId and processId
-router.get("/", getFormNineByUser);
+// Update Form Nine (surveyor only)
+router.put(
+  "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "mainRoomPhotos", maxCount: 5 },
+  ]),
+  updateFormNine
+);
 
 export default router;

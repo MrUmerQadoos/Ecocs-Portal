@@ -1,24 +1,35 @@
 import { FormFour } from "../model/FormFour.js";
 import path from "path";
-import fs from "fs";  // File system module for handling file deletion
+import fs from "fs";
 
-// Create Form Four with multiple photos
+// Create a new Form Four document
 export const createFormFour = async (req, res) => {
   try {
-    const { userId, ...formData } = req.body;
+    const { processId } = req.body;
+
+    // Check if a FormFour document already exists for this processId
+    const existingForm = await FormFour.findOne({ processId });
+    if (existingForm) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Four document already exists for this process.",
+      });
+    }
+
+    const formData = req.body;
     const filePaths = [];
 
     // If files are uploaded, store their paths in photoThermalSeparation array
-    if (req.files) {
+    if (req.files && req.files.length > 0) {
       req.files.forEach((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-four", file.filename);
-        filePath = filePath.replace(/\\/g, "/");  // Convert Windows backslashes to forward slashes
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-four", file.filename);
+        filePath = filePath.replace(/\\/g, "/"); // Convert Windows backslashes to forward slashes
         filePaths.push(filePath);
       });
-      formData.photoThermalSeparation = filePaths; // Assign the array of file paths
+      formData.photoThermalSeparation = filePaths;
     }
 
-    const newForm = new FormFour({ ...formData, userId });
+    const newForm = new FormFour(formData);
     await newForm.save();
 
     return res.status(201).json({
@@ -28,18 +39,21 @@ export const createFormFour = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating Form Four:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Four document already exists for this process.",
+      });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
-
-
-// Update Form Four with multiple photo uploads
 
 // Update Form Four with multiple photo uploads
 export const updateFormFour = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, ...formData } = req.body;
+    const formData = req.body;
 
     // Parse deletedImages (it might be sent as a JSON string or an array)
     let deletedImages = [];
@@ -56,7 +70,7 @@ export const updateFormFour = async (req, res) => {
     }
 
     // Convert absolute URLs to relative paths for comparison
-    const relativeDeletedImages = deletedImages.map(img => 
+    const relativeDeletedImages = deletedImages.map((img) =>
       img.replace("http://localhost:3000/", "")
     );
 
@@ -67,8 +81,8 @@ export const updateFormFour = async (req, res) => {
     }
 
     // Remove images marked for deletion from the existing images array
-    let updatedPhotos = existingForm.photoThermalSeparation.filter(photo => 
-      !relativeDeletedImages.includes(photo)
+    let updatedPhotos = existingForm.photoThermalSeparation.filter(
+      (photo) => !relativeDeletedImages.includes(photo)
     );
 
     // Delete physical files from the server for each deleted image
@@ -88,23 +102,22 @@ export const updateFormFour = async (req, res) => {
     let newPhotos = [];
     if (req.files && req.files.length > 0) {
       newPhotos = req.files.map((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-four", file.filename);
-        return filePath.replace(/\\/g, "/"); // Ensure forward slashes for consistency
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-four", file.filename);
+        return filePath.replace(/\\/g, "/");
       });
     }
 
     // Combine the remaining images with the newly uploaded ones
     updatedPhotos = [...updatedPhotos, ...newPhotos];
 
-    // Prepare the update object; don't send deletedImages to the database
+    // Prepare the update object
     const updateData = {
       ...formData,
-      userId,
       photoThermalSeparation: updatedPhotos,
     };
 
     // Update the document and return the updated record
-    const updatedForm = await FormFour.findByIdAndUpdate(id, updateData, { new: true });
+    const updatedForm = await FormFour.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
 
     return res.status(200).json({
       success: true,
@@ -113,25 +126,26 @@ export const updateFormFour = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating Form Four:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Four document already exists for this process.",
+      });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
-// Get Form Four data for a given userId and optionally processId
-export const getFormFourByUser = async (req, res) => {
+// Get Form Four data for a given processId
+export const getFormFourByProcess = async (req, res) => {
   try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
     }
 
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
-    }
-
-    const forms = await FormFour.find(query);
-    return res.status(200).json({ success: true, data: forms });
+    const form = await FormFour.findOne({ processId });
+    return res.status(200).json({ success: true, data: form });
   } catch (error) {
     console.error("Error fetching Form Four data:", error);
     return res.status(500).json({ success: false, error: "Internal Server Error" });

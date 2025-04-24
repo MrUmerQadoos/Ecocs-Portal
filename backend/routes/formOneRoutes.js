@@ -1,15 +1,17 @@
 import express from "express";
-import { createFormOne, getFormOneByUser, updateFormOne } from "../controllers/formOneController.js";
+import { createFormOne, getFormOne, updateFormOne } from "../controllers/formOneController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
-// Create a new Form One document
-router.post("/", createFormOne);
+// Create FormOne (surveyor only)
+router.post("/", verifyToken, restrictTo("surveyor"), createFormOne);
 
-// Get Form One documents for a given user (e.g., GET /api/assessments/form-one?userId=xxx&processId=yyy)
-router.get("/", getFormOneByUser);
+// Get FormOne (admin, manager, viewer, surveyor)
+router.get("/", verifyToken, restrictTo("admin", "manager", "viewer", "surveyor"), getFormOne);
 
-// Update a Form One document by its ID
-router.put("/:id", updateFormOne);
+// Update FormOne (surveyor only)
+router.put("/:formId", verifyToken, restrictTo("surveyor"), updateFormOne);
 
 export default router;

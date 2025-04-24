@@ -1,25 +1,36 @@
 import path from "path";
-import fs from "fs"; // File system for deleting images
+import fs from "fs";
 import { FormNine } from "../model/formNine.js";
 
 // Create a new Form Nine
 export const createFormNine = async (req, res) => {
   try {
-    const { userId, ...formData } = req.body;
+    const { processId } = req.body;
+
+    // Check if a FormNine document already exists for this processId
+    const existingForm = await FormNine.findOne({ processId });
+    if (existingForm) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Nine document already exists for this process.",
+      });
+    }
+
+    const formData = req.body;
     const filePaths = {
       mainRoomPhotos: [],
     };
 
-    // Handle file uploads
+    // Handle file uploads for mainRoomPhotos
     if (req.files && req.files.mainRoomPhotos) {
       req.files.mainRoomPhotos.forEach((file) => {
-        const filePath = path.join("uploads", `user-${userId}`, "form-nine", file.filename);
-        filePaths.mainRoomPhotos.push(filePath.replace(/\\/g, "/")); // Convert paths to forward slashes
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-nine", file.filename);
+        filePath = filePath.replace(/\\/g, "/");
+        filePaths.mainRoomPhotos.push(filePath);
       });
     }
 
-    // Create and save the Form Nine document
-    const newForm = new FormNine({ ...formData, userId, ...filePaths });
+    const newForm = new FormNine({ ...formData, ...filePaths });
     await newForm.save();
 
     return res.status(201).json({
@@ -29,25 +40,29 @@ export const createFormNine = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating Form Nine:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Nine document already exists for this process.",
+      });
+    }
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
-// Get Form Nine data by userId and processId
-export const getFormNineByUser = async (req, res) => {
+// Get Form Nine data by processId
+export const getFormNineByProcess = async (req, res) => {
   try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
     }
 
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
-    }
-
-    const forms = await FormNine.find(query);
-    return res.status(200).json({ success: true, data: forms });
+    const form = await FormNine.findOne({ processId });
+    return res.status(200).json({ success: true, data: form ? [form] : [] });
   } catch (error) {
     console.error("Error fetching Form Nine data:", error);
     return res.status(500).json({ success: false, error: "Internal Server Error" });
@@ -56,69 +71,90 @@ export const getFormNineByUser = async (req, res) => {
 
 // Update Form Nine with photo uploads and deletions
 export const updateFormNine = async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { userId, ...otherData } = req.body;
-  
-      // Parse deleted images array from the request
-      const deletedImages = JSON.parse(req.body.deletedMainRoomPhotos || "[]");
-  
-      // Fetch the existing Form Nine document
-      const existingForm = await FormNine.findById(id);
-      if (!existingForm) {
-        return res.status(404).json({ success: false, message: "Form Nine not found" });
-      }
-  
-      // Normalize deleted image URLs to match the database format
-      const normalizedDeletedImages = deletedImages.map((url) =>
-        url.replace("http://localhost:3000/", "")
-      );
-  
-      // Remove deleted images from the existing photos array
-      const updatedPhotos = existingForm.mainRoomPhotos.filter(
-        (photo) => !normalizedDeletedImages.includes(photo)
-      );
-  
-      // Delete the physical files from the server
-      const deleteImage = (imageUrl) => {
-        const relativePath = imageUrl.replace("http://localhost:3000/", "");
-        const filePath = path.join(process.cwd(), relativePath);
+  try {
+    const { id } = req.params;
+    const formData = req.body;
+
+    // Parse deleted images
+    let deletedMainRoomPhotos = [];
+    if (req.body.deletedMainRoomPhotos) {
+      deletedMainRoomPhotos =
+        typeof req.body.deletedMainRoomPhotos === "string"
+          ? JSON.parse(req.body.deletedMainRoomPhotos)
+          : req.body.deletedMainRoomPhotos;
+    }
+
+    // Convert absolute URLs to relative paths for comparison
+    const relativeDeletedMainRoomPhotos = deletedMainRoomPhotos.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+
+    // Fetch the existing document
+    const existingForm = await FormNine.findById(id);
+    if (!existingForm) {
+      return res.status(404).json({ success: false, message: "Form Nine not found" });
+    }
+
+    // Remove deleted images from existing array
+    let updatedMainRoomPhotos = existingForm.mainRoomPhotos.filter(
+      (photo) => !relativeDeletedMainRoomPhotos.includes(photo)
+    );
+
+    // Delete physical files from the server
+    const deleteImage = (relativeImg) => {
+      if (relativeImg && relativeImg.trim()) {
+        const filePath = path.join(process.cwd(), relativeImg);
         if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath); // Delete the file from disk
+          fs.unlinkSync(filePath);
           console.log(`Deleted file: ${filePath}`);
         } else {
           console.log(`File not found: ${filePath}`);
         }
-      };
-  
-      deletedImages.forEach(deleteImage);
-  
-      // Handle new file uploads
-      const newFilePaths = req.files?.mainRoomPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-nine", file.filename)
-      ) || [];
-  
-      // Merge the new file paths with the existing ones
-      updatedPhotos.push(...newFilePaths);
-  
-      // Update the Form Nine document with the new data and updated image array
-      const updatedForm = await FormNine.findByIdAndUpdate(
-        id,
-        {
-          ...otherData,
-          userId,
-          mainRoomPhotos: updatedPhotos, // Update the mainRoomPhotos array
-        },
-        { new: true } // Return the updated document
-      );
-  
-      return res.status(200).json({
-        success: true,
-        message: "Form Nine updated successfully",
-        data: updatedForm,
+      }
+    };
+
+    relativeDeletedMainRoomPhotos.forEach(deleteImage);
+
+    // Process new file uploads
+    let newMainRoomPhotos = [];
+    if (req.files && req.files.mainRoomPhotos) {
+      newMainRoomPhotos = req.files.mainRoomPhotos.map((file) => {
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-nine", file.filename);
+        return filePath.replace(/\\/g, "/");
       });
-    } catch (error) {
-      console.error("Error updating Form Nine:", error);
-      return res.status(500).json({ success: false, error: "Internal Server Error" });
     }
-  };
+
+    // Combine remaining images with new uploads
+    updatedMainRoomPhotos = [...updatedMainRoomPhotos, ...newMainRoomPhotos];
+
+    // Prepare the update object
+    const updateData = {
+      ...formData,
+      mainRoomPhotos: updatedMainRoomPhotos,
+    };
+
+    // Update the document
+    const updatedForm = await FormNine.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Form Nine updated successfully",
+      data: updatedForm,
+    });
+  } catch (error) {
+    console.error("Error updating Form Nine:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Nine document already exists for this process.",
+      });
+    }
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    return res.status(500).json({ success: false, error: "Internal Server Error" });
+  }
+};

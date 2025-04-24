@@ -1,16 +1,37 @@
 import express from "express";
-import { createFormTwo, getFormTwoByUser, updateFormTwo } from "../controllers/formTwoController.js";
-import upload from "../utils/fileUpload.js"; // Your multer configuration file
+import { createFormTwo, getFormTwo, updateFormTwo } from "../controllers/formTwoController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
+import upload from "../utils/fileUpload.js";
+
 
 const router = express.Router();
 
-// GET: Fetch Form Two data by userId and processId (if provided)
-router.get("/", getFormTwoByUser);
+// Create Form Two (surveyor only)
+router.post(
+  "/",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "elevationPhotos", maxCount: 10 },
+    { name: "additionalPhotos", maxCount: 10 },
+  ]),
+  createFormTwo
+);
 
-// POST: Create new Form Two with multiple file uploads
-router.post("/", upload.array("imageUrl"), createFormTwo);
+// Get Form Two (all roles can view)
+router.get("/", verifyToken, restrictTo("admin", "manager", "surveyor", "viewer"), getFormTwo);
 
-// PUT: Update existing Form Two with multiple file uploads and deletion functionality
-router.put("/:id", upload.array("imageUrl"), updateFormTwo);
+// Update Form Two (surveyor only)
+router.put(
+  "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "elevationPhotos", maxCount: 10 },
+    { name: "additionalPhotos", maxCount: 10 },
+  ]),
+  updateFormTwo
+);
 
 export default router;

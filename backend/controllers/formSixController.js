@@ -1,184 +1,200 @@
 import path from "path";
-import fs from "fs"; // File system for deleting images
+import fs from "fs";
 import { FormSix } from "../model/formSix.js";
 
 // Create a new Form Six
 export const createFormSix = async (req, res) => {
-    try {
-      const { userId, ...formData } = req.body;
-      const filePaths = {
-        constructionPhotos: [],
-        insulationPhotos: [],
-        thicknessPhotos: [],
-      };
-  
-      // Check if files are uploaded for each field
-      if (req.files) {
-        // For each field (constructionPhotos, insulationPhotos, thicknessPhotos)
-        for (let field in req.files) {
-          req.files[field].forEach((file) => {
-            let filePath = path.join("uploads", `user-${userId}`, "form-six", file.filename);
-            filePath = filePath.replace(/\\/g, "/"); // Convert Windows paths to forward slashes
-            
-            // Map the file to the corresponding photo array
-            if (field === "constructionPhotos") {
-              filePaths.constructionPhotos.push(filePath);
-            } else if (field === "insulationPhotos") {
-              filePaths.insulationPhotos.push(filePath);
-            } else if (field === "thicknessPhotos") {
-              filePaths.thicknessPhotos.push(filePath);
-            }
-          });
-        }
-      }
-  
-      // Create and save the Form Six document
-      const newForm = new FormSix({ ...formData, userId, ...filePaths });
-      await newForm.save();
-  
-      return res.status(201).json({
-        success: true,
-        message: "Form Six created successfully",
-        data: newForm,
-      });
-    } catch (error) {
-      console.error("Error creating Form Six:", error);
-      return res.status(500).json({ success: false, error: "Internal Server Error" });
-    }
-  };
-  
-  
-// Get Form Six data by userId and processId
-export const getFormSixByUser = async (req, res) => {
   try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { processId } = req.body;
+
+    // Check if a FormSix document already exists for this processId
+    const existingForm = await FormSix.findOne({ processId });
+    if (existingForm) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Six document already exists for this process.",
+      });
     }
 
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
+    const formData = req.body;
+    const filePaths = {
+      constructionPhotos: [],
+      insulationPhotos: [],
+      thicknessPhotos: [],
+    };
+
+    // Handle file uploads for each group
+    if (req.files) {
+      for (let field in req.files) {
+        req.files[field].forEach((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-six", file.filename);
+          filePath = filePath.replace(/\\/g, "/");
+          if (field === "constructionPhotos") {
+            filePaths.constructionPhotos.push(filePath);
+          } else if (field === "insulationPhotos") {
+            filePaths.insulationPhotos.push(filePath);
+          } else if (field === "thicknessPhotos") {
+            filePaths.thicknessPhotos.push(filePath);
+          }
+        });
+      }
     }
 
-    const forms = await FormSix.find(query);
-    return res.status(200).json({ success: true, data: forms });
+    const newForm = new FormSix({ ...formData, ...filePaths });
+    await newForm.save();
+
+    return res.status(201).json({
+      success: true,
+      message: "Form Six created successfully",
+      data: newForm,
+    });
+  } catch (error) {
+    console.error("Error creating Form Six:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Six document already exists for this process.",
+      });
+    }
+    return res.status(500).json({ success: false, error: "Internal Server Error" });
+  }
+};
+
+// Get Form Six data by processId
+export const getFormSixByProcess = async (req, res) => {
+  try {
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
+    }
+
+    const form = await FormSix.findOne({ processId });
+    return res.status(200).json({ success: true, data: form });
   } catch (error) {
     console.error("Error fetching Form Six data:", error);
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
-
 // Update Form Six with photo uploads and deletions
 export const updateFormSix = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, ...otherData } = req.body;
+    const formData = req.body;
 
-    // Parse deleted images arrays from the request
-    const deletedImages = {
-      constructionPhotos: JSON.parse(req.body.deletedConstruction || "[]"),
-      insulationPhotos: JSON.parse(req.body.deletedInsulation || "[]"),
-      thicknessPhotos: JSON.parse(req.body.deletedThickness || "[]"),
-    };
+    // Parse deleted images for each group
+    let deletedConstruction = [];
+    let deletedInsulation = [];
+    let deletedThickness = [];
 
-    // Log the deleted images to ensure we are receiving them correctly
-    // console.log("Deleted Images: ", deletedImages);
+    if (req.body.deletedConstruction) {
+      deletedConstruction =
+        typeof req.body.deletedConstruction === "string"
+          ? JSON.parse(req.body.deletedConstruction)
+          : req.body.deletedConstruction;
+    }
+    if (req.body.deletedInsulation) {
+      deletedInsulation =
+        typeof req.body.deletedInsulation === "string"
+          ? JSON.parse(req.body.deletedInsulation)
+          : req.body.deletedInsulation;
+    }
+    if (req.body.deletedThickness) {
+      deletedThickness =
+        typeof req.body.deletedThickness === "string"
+          ? JSON.parse(req.body.deletedThickness)
+          : req.body.deletedThickness;
+    }
 
-    // Fetch the existing Form Six document
+    // Convert absolute URLs to relative paths for comparison
+    const relativeDeletedConstruction = deletedConstruction.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+    const relativeDeletedInsulation = deletedInsulation.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+    const relativeDeletedThickness = deletedThickness.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+
+    // Fetch the existing document
     const existingForm = await FormSix.findById(id);
     if (!existingForm) {
       return res.status(404).json({ success: false, message: "Form Six not found" });
     }
 
-    // Log the existing form data
-    // console.log("Existing Form: ", existingForm);
+    // Remove deleted images from existing arrays
+    let updatedConstructionPhotos = existingForm.constructionPhotos.filter(
+      (photo) => !relativeDeletedConstruction.includes(photo)
+    );
+    let updatedInsulationPhotos = existingForm.insulationPhotos.filter(
+      (photo) => !relativeDeletedInsulation.includes(photo)
+    );
+    let updatedThicknessPhotos = existingForm.thicknessPhotos.filter(
+      (photo) => !relativeDeletedThickness.includes(photo)
+    );
 
-    // Ensure that the URLs in `deletedImages` match the database values
-    // We need to convert the absolute URL to the relative path for comparison
-    const relativeDeletedImages = {
-      constructionPhotos: deletedImages.constructionPhotos.map(
-        (url) => url.replace("http://localhost:3000/", "")
-      ),
-      insulationPhotos: deletedImages.insulationPhotos.map(
-        (url) => url.replace("http://localhost:3000/", "")
-      ),
-      thicknessPhotos: deletedImages.thicknessPhotos.map(
-        (url) => url.replace("http://localhost:3000/", "")
-      ),
-    };
-
-    // Log the relative deleted images
-    // console.log("Relative Deleted Images: ", relativeDeletedImages);
-
-    // Remove deleted images from the existing photos arrays
-    const updatedPhotos = {
-      constructionPhotos: existingForm.constructionPhotos.filter(
-        (photo) => !relativeDeletedImages.constructionPhotos.includes(photo)
-      ),
-      insulationPhotos: existingForm.insulationPhotos.filter(
-        (photo) => !relativeDeletedImages.insulationPhotos.includes(photo)
-      ),
-      thicknessPhotos: existingForm.thicknessPhotos.filter(
-        (photo) => !relativeDeletedImages.thicknessPhotos.includes(photo)
-      ),
-    };
-
-    // Log the updated photos to see if they are correctly filtered
-    console.log("Updated Photos After Filtering: ", updatedPhotos);
-
-    // Delete the physical files from the server (if they exist)
-    const deleteImage = (imageUrl) => {
-      // Convert the absolute URL to the relative file path
-      const relativePath = imageUrl.replace("http://localhost:3000/", "");
-      const filePath = path.join(process.cwd(), relativePath);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath); // Delete the file from disk
-        console.log(`Deleted file: ${filePath}`);
-      } else {
-        console.log(`File not found: ${filePath}`);
+    // Delete physical files from the server
+    const deleteImage = (relativeImg) => {
+      if (relativeImg && relativeImg.trim()) {
+        const filePath = path.join(process.cwd(), relativeImg);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`Deleted file: ${filePath}`);
+        } else {
+          console.log(`File not found: ${filePath}`);
+        }
       }
     };
 
-    // Delete each image in the deleted images array
-    relativeDeletedImages.constructionPhotos.forEach(deleteImage);
-    relativeDeletedImages.insulationPhotos.forEach(deleteImage);
-    relativeDeletedImages.thicknessPhotos.forEach(deleteImage);
+    relativeDeletedConstruction.forEach(deleteImage);
+    relativeDeletedInsulation.forEach(deleteImage);
+    relativeDeletedThickness.forEach(deleteImage);
 
-    // Handle new file uploads and add them to the arrays
-    const newFilePaths = {
-      constructionPhotos: req.files?.constructionPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-six", file.filename)
-      ) || [],
-      insulationPhotos: req.files?.insulationPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-six", file.filename)
-      ) || [],
-      thicknessPhotos: req.files?.thicknessPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-six", file.filename)
-      ) || [],
+    // Process new file uploads
+    let newConstructionPhotos = [];
+    let newInsulationPhotos = [];
+    let newThicknessPhotos = [];
+
+    if (req.files) {
+      if (req.files.constructionPhotos) {
+        newConstructionPhotos = req.files.constructionPhotos.map((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-six", file.filename);
+          return filePath.replace(/\\/g, "/");
+        });
+      }
+      if (req.files.insulationPhotos) {
+        newInsulationPhotos = req.files.insulationPhotos.map((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-six", file.filename);
+          return filePath.replace(/\\/g, "/");
+        });
+      }
+      if (req.files.thicknessPhotos) {
+        newThicknessPhotos = req.files.thicknessPhotos.map((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-six", file.filename);
+          return filePath.replace(/\\/g, "/");
+        });
+      }
+    }
+
+    // Combine remaining images with new uploads
+    updatedConstructionPhotos = [...updatedConstructionPhotos, ...newConstructionPhotos];
+    updatedInsulationPhotos = [...updatedInsulationPhotos, ...newInsulationPhotos];
+    updatedThicknessPhotos = [...updatedThicknessPhotos, ...newThicknessPhotos];
+
+    // Prepare the update object
+    const updateData = {
+      ...formData,
+      constructionPhotos: updatedConstructionPhotos,
+      insulationPhotos: updatedInsulationPhotos,
+      thicknessPhotos: updatedThicknessPhotos,
     };
 
-    // Merge the new file paths with the existing ones
-    updatedPhotos.constructionPhotos.push(...newFilePaths.constructionPhotos);
-    updatedPhotos.insulationPhotos.push(...newFilePaths.insulationPhotos);
-    updatedPhotos.thicknessPhotos.push(...newFilePaths.thicknessPhotos);
-
-    // Log the final updated arrays
-    console.log("Final Updated Photos: ", updatedPhotos);
-
-    // Update the Form Six document with the new data and updated image arrays
-    const updatedForm = await FormSix.findByIdAndUpdate(
-      id,
-      {
-        ...otherData,
-        userId,
-        constructionPhotos: updatedPhotos.constructionPhotos,
-        insulationPhotos: updatedPhotos.insulationPhotos,
-        thicknessPhotos: updatedPhotos.thicknessPhotos,
-      },
-      { new: true }
-    );
+    // Update the document
+    const updatedForm = await FormSix.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    });
 
     return res.status(200).json({
       success: true,
@@ -187,6 +203,12 @@ export const updateFormSix = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating Form Six:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Six document already exists for this process.",
+      });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };

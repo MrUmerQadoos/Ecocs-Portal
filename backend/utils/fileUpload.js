@@ -8,71 +8,116 @@ const fileFilter = (req, file, cb) => {
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
+    console.error("File filter error: Invalid file type:", file.mimetype);
     cb(new Error("Invalid file type. Only JPEG, PNG, JPG, and PDF are allowed."), false);
   }
 };
 
+// Map of form routes to folder names (exact matches preferred)
+const formFolderMap = {
+  "/api/assessments/form-one": "form-one",
+  "/api/assessments/form-two": "form-two",
+  "/api/assessments/form-three": "form-three",
+  "/api/assessments/form-four": "form-four",
+  "/api/assessments/form-five": "form-five",
+  "/api/assessments/form-six": "form-six",
+  "/api/assessments/form-seven": "form-seven",
+  "/api/assessments/form-eight": "form-eight",
+  "/api/assessments/form-nine": "form-nine",
+  "/api/assessments/form-ten": "form-ten",
+  "/api/assessments/form-eleven": "form-eleven",
+  "/api/assessments/form-twelve": "form-twelve",
+  "/api/assessments/form-thirteen": "form-thirteen",
+  "/api/assessments/form-fourteen": "form-fourteen",
+  "/api/assessments/form-fifteen": "form-fifteen",
+  "/api/assessments/form-sixteen": "form-sixteen",
+  "/api/assessments/form-seventeen": "form-seventeen",
+  "/api/assessments/form-eighteen": "form-eighteen",
+  "/api/assessments/form-nineteen": "form-nineteen",
+  "/api/assessments/form-twenty": "form-twenty",
+  "/api/assessments/form-twenty-one": "form-twenty-one",
+  "/api/assessments/form-twenty-two": "form-twenty-two",
+  "/api/assessments/form-twenty-three": "form-twenty-three",
+  "/api/assessments/form-twenty-four": "form-twenty-four",
+  "/api/assessments/form-twenty-five": "form-twenty-five",
+  "/api/assessments/form-twenty-six": "form-twenty-six",
+};
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const userId = req.body.userId; // Get userId from the request body
+    // Extensive logging for debugging
+    console.log("Multer destination - req.method:", req.method);
+    console.log("Multer destination - req.baseUrl:", req.baseUrl);
+    console.log("Multer destination - req.originalUrl:", req.originalUrl);
+    console.log("Multer destination - req.path:", req.path);
+    console.log("Multer destination - req.body:", req.body);
+
+    const userId = req.body.userId;
     if (!userId) {
-      return cb(new Error("User ID is required"), false);
+      console.error("User ID is missing in request body");
+      return cb(new Error("User ID is required"), null);
     }
 
-    // 1) Create the user-specific folder if it doesn't exist
-    const userDir = path.join(process.cwd(), "uploads", `user-${userId}`);
-    if (!fs.existsSync(userDir)) {
-      fs.mkdirSync(userDir, { recursive: true });
+    const baseDir = path.join(process.cwd(), "uploads");
+    const userDir = path.join(baseDir, `user-${userId}`);
+
+    // Determine form folder from baseUrl
+    const baseUrl = req.baseUrl || "";
+    let formFolder = formFolderMap[baseUrl];
+
+    // Fallback: Check originalUrl if baseUrl doesn’t match
+    if (!formFolder && req.originalUrl) {
+      for (const key in formFolderMap) {
+        if (req.originalUrl.includes(key)) {
+          formFolder = formFolderMap[key];
+          console.log(`Fallback match from originalUrl: ${formFolder}`);
+          break;
+        }
+      }
     }
 
-    // 2) Determine which form folder to use based on the base URL of the request
-    const baseUrl = req.baseUrl || ""; // e.g., "/api/assessments/form-five"
-    let formFolder = ""; // default value
-
-    // Dynamically map form folder based on the request URL path
-    if (baseUrl.includes("form-one")) {
-      formFolder = "form-one";
-    } else if (baseUrl.includes("form-two")) {
-      formFolder = "form-two";
-    } else if (baseUrl.includes("form-three")) {
-      formFolder = "form-three";
-    } else if (baseUrl.includes("form-four")) {
-      formFolder = "form-four";
-    } else if (baseUrl.includes("form-five")) {
-      formFolder = "form-five";
-    } else if (baseUrl.includes("form-six")) {
-      formFolder = "form-six";
-    } else if (baseUrl.includes("form-seven")) {
-      formFolder = "form-seven";
-    } else if (baseUrl.includes("form-eight")) {
-      formFolder = "form-eight";
-    } else if (baseUrl.includes("form-nine")) {
-      formFolder = "form-nine";
-    }
-    // Add more conditions for additional forms as needed
-
-    // 3) Ensure the form folder exists or create it
     if (!formFolder) {
-      return cb(new Error("Form folder not found or not specified"), false);
+      console.error("Form folder could not be determined:", { baseUrl, originalUrl: req.originalUrl });
+      return cb(new Error("Form folder not found or not specified"), null);
     }
 
     const formDir = path.join(userDir, formFolder);
-    if (!fs.existsSync(formDir)) {
-      fs.mkdirSync(formDir, { recursive: true });
+
+    // Ensure directories exist
+    try {
+      if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+        console.log(`Created base directory: ${baseDir}`);
+      }
+      if (!fs.existsSync(userDir)) {
+        fs.mkdirSync(userDir, { recursive: true });
+        console.log(`Created user directory: ${userDir}`);
+      }
+      if (!fs.existsSync(formDir)) {
+        fs.mkdirSync(formDir, { recursive: true });
+        console.log(`Created form directory: ${formDir}`);
+      }
+    } catch (error) {
+      console.error("Error creating directories:", error);
+      return cb(new Error(`Failed to create directory: ${error.message}`), null);
     }
 
-    // 4) Pass the final folder path to multer
+    console.log(`Uploading to directory: ${formDir}`);
     cb(null, formDir);
   },
 
   filename: (req, file, cb) => {
-    // Create a unique filename for each file
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
     const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + "-" + uniqueSuffix + ext);
+    const filename = `${file.fieldname}-${uniqueSuffix}${ext}`;
+    console.log(`Generated filename: ${filename}`);
+    cb(null, filename);
   },
 });
 
-const upload = multer({ storage, fileFilter });
+const upload = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+});
 
 export default upload;

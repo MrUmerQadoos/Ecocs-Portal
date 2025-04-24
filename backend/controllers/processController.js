@@ -1,14 +1,28 @@
 import { Process } from "../model/Process.js";
+import { Task } from "../model/task.js";
 
-// Create a new process for the logged-in user.
 export const createProcess = async (req, res) => {
   try {
-    const { userId, name } = req.body;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { taskId, formType, formData } = req.body;
+    const surveyorId = req.user._id; // From verifyToken
+
+    const task = await Task.findById(taskId);
+    if (!task || task.assignedTo.toString() !== surveyorId.toString()) {
+      return res.status(403).json({ success: false, error: "Unauthorized or task not found" });
     }
-    const newProcess = new Process({ userId, name });
+
+    const newProcess = new Process({
+      taskId,
+      surveyorId,
+      formType,
+      formData,
+    });
     await newProcess.save();
+
+    // Update task with processId
+    task.processId = newProcess._id;
+    task.status = "in_progress";
+    await task.save();
 
     return res.status(201).json({
       success: true,
@@ -21,14 +35,20 @@ export const createProcess = async (req, res) => {
   }
 };
 
-// Get all processes for a given user.
 export const getProcessesByUser = async (req, res) => {
   try {
     const { userId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const role = req.user.role;
+
+    let processes;
+    if (role === "admin" || role === "manager" || role === "viewer") {
+      processes = await Process.find().populate("taskId surveyorId", "title name email");
+    } else if (role === "surveyor") {
+      processes = await Process.find({ surveyorId: userId }).populate("taskId", "title");
+    } else {
+      return res.status(403).json({ success: false, error: "Unauthorized" });
     }
-    const processes = await Process.find({ userId });
+
     return res.status(200).json({ success: true, data: processes });
   } catch (error) {
     console.error("Error fetching processes:", error);

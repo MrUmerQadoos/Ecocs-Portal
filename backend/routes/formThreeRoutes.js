@@ -1,19 +1,36 @@
 import express from "express";
 import {
   createFormThree,
-  getFormThreeByUser,
+  getFormThreeByProcess,
   updateFormThree,
 } from "../controllers/formThreeController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
-// Create a new Form Three
-router.post("/", createFormThree);
+// Create Form Three (surveyor only)
+router.post(
+  "/",
+  verifyToken,
+  restrictTo("surveyor"),
+  createFormThree
+);
 
-// Get Form Three by userId (and optional processId)
-router.get("/", getFormThreeByUser);
+// Get Form Three (all roles can view)
+router.get(
+  "/",
+  verifyToken,
+  restrictTo("admin", "manager", "surveyor", "viewer"),
+  getFormThreeByProcess
+);
 
-// Update Form Three by ID
-router.put("/:id", updateFormThree);
+// Update Form Three (surveyor only)
+router.put(
+  "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
+  updateFormThree
+);
 
 export default router;

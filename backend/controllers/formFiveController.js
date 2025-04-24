@@ -1,25 +1,35 @@
-// controllers/formFiveController.js
-
 import { FormFive } from "../model/FormFive.js";
 import path from "path";
-import fs from 'fs'; // Add this import for file system operations
-// Create Form Five with multiple photos
+import fs from "fs";
+
+// Create a new Form Five document
 export const createFormFive = async (req, res) => {
   try {
-    const { userId, ...formData } = req.body;
+    const { processId } = req.body;
+
+    // Check if a FormFive document already exists for this processId
+    const existingForm = await FormFive.findOne({ processId });
+    if (existingForm) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Five document already exists for this process.",
+      });
+    }
+
+    const formData = req.body;
     const filePaths = [];
 
     // If files are uploaded, store their paths in corridorPhotos array
-    if (req.files) {
+    if (req.files && req.files.length > 0) {
       req.files.forEach((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-five", file.filename);
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-five", file.filename);
         filePath = filePath.replace(/\\/g, "/"); // Convert Windows backslashes to forward slashes
         filePaths.push(filePath);
       });
-      formData.corridorPhotos = filePaths; // Assign the array of file paths
+      formData.corridorPhotos = filePaths;
     }
 
-    const newForm = new FormFive({ ...formData, userId });
+    const newForm = new FormFive(formData);
     await newForm.save();
 
     return res.status(201).json({
@@ -29,16 +39,21 @@ export const createFormFive = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating Form Five:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Five document already exists for this process.",
+      });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
-
 
 // Update Form Five with multiple photo uploads
 export const updateFormFive = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, ...otherData } = req.body;
+    const formData = req.body;
 
     // Parse deletedImages (it might be sent as a JSON string or an array)
     let deletedImages = [];
@@ -54,6 +69,11 @@ export const updateFormFive = async (req, res) => {
       }
     }
 
+    // Convert absolute URLs to relative paths for comparison
+    const relativeDeletedImages = deletedImages.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+
     // Fetch the existing document from the database
     const existingForm = await FormFive.findById(id);
     if (!existingForm) {
@@ -61,15 +81,19 @@ export const updateFormFive = async (req, res) => {
     }
 
     // Remove images marked for deletion from the existing images array
-    let updatedPhotos = existingForm.corridorPhotos.filter(photo => !deletedImages.includes(photo));
+    let updatedPhotos = existingForm.corridorPhotos.filter(
+      (photo) => !relativeDeletedImages.includes(photo)
+    );
 
-    // Optionally delete physical files from the server
-    deletedImages.forEach((image) => {
-      // Only process if image is a valid non-empty string
-      if (typeof image === "string" && image.trim()) {
-        const filePath = path.join(process.cwd(), image);
+    // Delete physical files from the server for each deleted image
+    relativeDeletedImages.forEach((relativeImg) => {
+      if (relativeImg && relativeImg.trim()) {
+        const filePath = path.join(process.cwd(), relativeImg);
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
+          console.log(`Deleted file: ${filePath}`);
+        } else {
+          console.log(`File not found: ${filePath}`);
         }
       }
     });
@@ -78,23 +102,22 @@ export const updateFormFive = async (req, res) => {
     let newPhotos = [];
     if (req.files && req.files.length > 0) {
       newPhotos = req.files.map((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-five", file.filename);
-        return filePath.replace(/\\/g, "/"); // Ensure forward slashes for consistency
+        let filePath = path.join("uploads", `user-${formData.userId}`, "form-five", file.filename);
+        return filePath.replace(/\\/g, "/");
       });
     }
 
     // Combine the remaining images with the newly uploaded ones
     updatedPhotos = [...updatedPhotos, ...newPhotos];
 
-    // Prepare the update object; don't send deletedImages to the database
+    // Prepare the update object
     const updateData = {
-      ...otherData,
-      userId,
+      ...formData,
       corridorPhotos: updatedPhotos,
     };
 
     // Update the document and return the updated record
-    const updatedForm = await FormFive.findByIdAndUpdate(id, updateData, { new: true });
+    const updatedForm = await FormFive.findByIdAndUpdate(id, updateData, { new: true, runValidators: true });
 
     return res.status(200).json({
       success: true,
@@ -103,26 +126,26 @@ export const updateFormFive = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating Form Five:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Five document already exists for this process.",
+      });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
-
-// Get Form Five data for a given userId and optionally processId
-export const getFormFiveByUser = async (req, res) => {
+// Get Form Five data for a given processId
+export const getFormFiveByProcess = async (req, res) => {
   try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
     }
 
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
-    }
-
-    const forms = await FormFive.find(query);
-    return res.status(200).json({ success: true, data: forms });
+    const form = await FormFive.findOne({ processId });
+    return res.status(200).json({ success: true, data: form });
   } catch (error) {
     console.error("Error fetching Form Five data:", error);
     return res.status(500).json({ success: false, error: "Internal Server Error" });

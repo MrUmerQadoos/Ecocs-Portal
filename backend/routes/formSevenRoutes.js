@@ -1,12 +1,16 @@
 import express from "express";
-import { createFormSeven, updateFormSeven, getFormSevenByUser } from "../controllers/formSevenController.js";
-import upload from "../utils/fileUpload.js"; // Import the file upload middleware
+import { createFormSeven, updateFormSeven, getFormSevenByProcess } from "../controllers/formSevenController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
+import upload from "../utils/fileUpload.js";
 
 const router = express.Router();
 
-// Route to create Form Seven
+// Create Form Seven (surveyor only)
 router.post(
   "/",
+  verifyToken,
+  restrictTo("surveyor"),
   upload.fields([
     { name: "wallInsulationPhotos", maxCount: 5 },
     { name: "alternativeWallsPhotos", maxCount: 5 },
@@ -15,9 +19,19 @@ router.post(
   createFormSeven
 );
 
-// Route to update Form Seven
+// Get Form Seven (all roles can view)
+router.get(
+  "/",
+  verifyToken,
+  restrictTo("admin", "manager", "surveyor", "viewer"),
+  getFormSevenByProcess
+);
+
+// Update Form Seven (surveyor only)
 router.put(
   "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
   upload.fields([
     { name: "wallInsulationPhotos", maxCount: 5 },
     { name: "alternativeWallsPhotos", maxCount: 5 },
@@ -25,8 +39,5 @@ router.put(
   ]),
   updateFormSeven
 );
-
-// Route to get Form Seven by userId and processId
-router.get("/", getFormSevenByUser);
 
 export default router;

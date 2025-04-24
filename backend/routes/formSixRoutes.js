@@ -1,24 +1,43 @@
 import express from "express";
-import { createFormSix, updateFormSix, getFormSixByUser } from "../controllers/formSixController.js";
-import upload from "../utils/fileUpload.js"; // Import the file upload middleware
+import { createFormSix, updateFormSix, getFormSixByProcess } from "../controllers/formSixController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
+import upload from "../utils/fileUpload.js";
 
 const router = express.Router();
 
-// Route to create Form Six
-router.post("/", upload.fields([
-  { name: "constructionPhotos", maxCount: 5 },
-  { name: "insulationPhotos", maxCount: 5 },
-  { name: "thicknessPhotos", maxCount: 5 },
-]), createFormSix);
+// Create Form Six (surveyor only)
+router.post(
+  "/",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "constructionPhotos", maxCount: 5 },
+    { name: "insulationPhotos", maxCount: 5 },
+    { name: "thicknessPhotos", maxCount: 5 },
+  ]),
+  createFormSix
+);
 
-// Route to update Form Six
-router.put("/:id", upload.fields([
-  { name: "constructionPhotos", maxCount: 5 },
-  { name: "insulationPhotos", maxCount: 5 },
-  { name: "thicknessPhotos", maxCount: 5 },
-]), updateFormSix);
+// Get Form Six (all roles can view)
+router.get(
+  "/",
+  verifyToken,
+  restrictTo("admin", "manager", "surveyor", "viewer"),
+  getFormSixByProcess
+);
 
-// Route to get Form Six by userId and processId
-router.get("/", getFormSixByUser);
+// Update Form Six (surveyor only)
+router.put(
+  "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.fields([
+    { name: "constructionPhotos", maxCount: 5 },
+    { name: "insulationPhotos", maxCount: 5 },
+    { name: "thicknessPhotos", maxCount: 5 },
+  ]),
+  updateFormSix
+);
 
 export default router;

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,21 +9,18 @@ import { useAuthStore } from "@/store/authStore";
 
 export default function FormTwo() {
   const navigate = useNavigate();
-  const { processId } = useParams(); // e.g. /process/:processId/form-two
+  const { processId: urlProcessId } = useParams();
+  const location = useLocation();
   const { toast } = useToast();
   const { user } = useAuthStore();
 
-  // Document ID and unsaved-changes tracking
   const [docId, setDocId] = useState(null);
+  const [taskId, setTaskId] = useState(null);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [isUpdate, setIsUpdate] = useState(false);
+  const [isViewOnly, setIsViewOnly] = useState(false);
+  const [savedProcessId, setSavedProcessId] = useState(null);
 
-  // File upload state for multiple images (elevation photos)
-  const [files, setFiles] = useState([]);
-  const [imagePreviews, setImagePreviews] = useState([]);
-  const [deletedImages, setDeletedImages] = useState([]); // track images that are deleted
-
-  // Form fields – note: imageUrl will store an array of file paths from backend.
   const [formData, setFormData] = useState({
     propertyTenure: "",
     transactionType: "",
@@ -33,41 +30,53 @@ export default function FormTwo() {
     numberOfHeatedHabitableRooms: "",
     mainPropertyDateBand: "",
     mainPropertyRoomInRoofDateBand: "",
-    elevationPhotos: "", // dropdown selection (e.g., "Front", "Rear", etc.)
-    imageUrl: [],      // multiple uploaded image URLs will be stored here
-    userId: "",
-    processId: processId || "",
+    elevationPhotoSelection: "", // Updated from elevationPhotos
+    userId: user?._id || "",
+    processId: urlProcessId || "",
   });
 
-  // 1) Set userId and processId when available
-  useEffect(() => {
-    if (user && user._id) {
-      setFormData((prev) => ({
-        ...prev,
-        userId: user._id,
-        processId,
-      }));
-    }
-  }, [user, processId]);
+  const [elevationFiles, setElevationFiles] = useState([]);
+  const [elevationPreviews, setElevationPreviews] = useState([]);
+  const [elevationDeleted, setElevationDeleted] = useState([]);
 
-  // 2) Fetch existing Form Two data on mount
+  const [additionalFiles, setAdditionalFiles] = useState([]);
+  const [additionalPreviews, setAdditionalPreviews] = useState([]);
+  const [additionalDeleted, setAdditionalDeleted] = useState([]);
+
   useEffect(() => {
-    if (user && user._id && processId) {
-      fetch(`http://localhost:3000/api/assessments/form-two?userId=${user._id}&processId=${processId}`)
+    const isViewing = location.pathname.includes("/view-form");
+    setIsViewOnly(isViewing || user.role !== "surveyor");
+    const queryTaskId = new URLSearchParams(location.search).get("taskId");
+    setTaskId(queryTaskId);
+
+    if (urlProcessId && urlProcessId !== "new") {
+      fetch(`http://localhost:3000/api/assessments/form-two?processId=${urlProcessId}`, {
+        method: "GET",
+        credentials: "include",
+      })
         .then((res) => res.json())
         .then((data) => {
-          if (data.success && data.data && data.data.length > 0) {
-            const existingForm = data.data[0];
-            setFormData(existingForm);
-            setDocId(existingForm._id);
+          if (data.success && data.data) {
+            setFormData({
+              ...data.data,
+              elevationPhotoSelection: data.data.elevationPhotoSelection, // Updated from elevationPhotos
+            });
+            setDocId(data.data._id);
             setIsUpdate(true);
+            setSavedProcessId(data.data.processId);
 
-            // If imageUrl is available, set the previews (convert relative paths to full URL)
-            if (existingForm.imageUrl && existingForm.imageUrl.length > 0) {
-              const previews = existingForm.imageUrl.map(
-                (imgPath) => `http://localhost:3000/${imgPath}`
+            if (data.data.elevationPhotos && data.data.elevationPhotos.length > 0) {
+              const previews = data.data.elevationPhotos.map(
+                (img) => `http://localhost:3000/${img}`
               );
-              setImagePreviews(previews);
+              setElevationPreviews(previews);
+            }
+
+            if (data.data.additionalPhotos && data.data.additionalPhotos.length > 0) {
+              const previews = data.data.additionalPhotos.map(
+                (img) => `http://localhost:3000/${img}`
+              );
+              setAdditionalPreviews(previews);
             }
           }
         })
@@ -75,154 +84,189 @@ export default function FormTwo() {
           toast({
             variant: "destructive",
             title: "Error",
-            description: "Error fetching saved data.",
+            description: "Failed to load Form Two data.",
           });
           console.error("Fetch error:", error);
         });
     }
-  }, [user, processId, toast]);
+  }, [urlProcessId, user, location, toast]);
 
-  // 3) Warn user about unsaved changes on page unload
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      if (unsavedChanges) {
+      if (unsavedChanges && !isViewOnly) {
         e.preventDefault();
-        e.returnValue = "You have unsaved changes. If you leave, your data will be lost.";
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [unsavedChanges]);
+  }, [unsavedChanges, isViewOnly]);
 
-  // 4) Handle input changes for text and select fields
   const handleChange = (e) => {
     setFormData((prev) => ({
       ...prev,
       [e.target.name]: e.target.value,
       userId: user ? user._id : "",
-      processId,
+      processId: urlProcessId,
     }));
     setUnsavedChanges(true);
   };
 
-  // 5) Handle file upload for multiple images
-  const handleFileChange = (e) => {
+  const handleElevationFileChange = (e) => {
     const selectedFiles = Array.from(e.target.files);
-    setFiles((prevFiles) => [...prevFiles, ...selectedFiles]);
-
-    // Create preview URLs for each selected file
+    setElevationFiles((prev) => [...prev, ...selectedFiles]);
     const previewUrls = selectedFiles.map((file) => URL.createObjectURL(file));
-    setImagePreviews((prevPreviews) => [...prevPreviews, ...previewUrls]);
-
+    setElevationPreviews((prev) => [...prev, ...previewUrls]);
     setUnsavedChanges(true);
   };
 
-  // 6) Handle deletion of a specific image from previews and files
-  const handleDeleteImage = (index, previewUrl) => {
-    const updatedFiles = files.filter((_, idx) => idx !== index);
-    const updatedPreviews = imagePreviews.filter((_, idx) => idx !== index);
-
-    // Also, if this preview URL corresponds to an already saved image (i.e. exists in formData.imageUrl),
-    // add its full URL to deletedImages array.
-    if (formData.imageUrl && formData.imageUrl.length > 0) {
-      // Convert each saved image URL to full URL for comparison
-      const fullUrls = formData.imageUrl.map(img => `http://localhost:3000/${img}`);
-      if (fullUrls.includes(previewUrl)) {
-        setDeletedImages((prev) => {
-          if (!prev.includes(previewUrl)) {
-            return [...prev, previewUrl];
-          }
-          return prev;
-        });
+  const handleDeleteElevationImage = (index, previewUrl) => {
+    const updatedFiles = elevationFiles.filter((_, idx) => idx !== index);
+    const updatedPreviews = elevationPreviews.filter((_, idx) => idx !== index);
+    setElevationDeleted((prev) => {
+      if (!prev.includes(previewUrl)) {
+        return [...prev, previewUrl];
       }
-    }
-
-    setFiles(updatedFiles);
-    setImagePreviews(updatedPreviews);
+      return prev;
+    });
+    setElevationFiles(updatedFiles);
+    setElevationPreviews(updatedPreviews);
     setUnsavedChanges(true);
   };
 
-  // 7) Save or Update Form Two
-  const handleSave = async () => {
+  const handleAdditionalFileChange = (e) => {
+    const selectedFiles = Array.from(e.target.files);
+    setAdditionalFiles((prev) => [...prev, ...selectedFiles]);
+    const previewUrls = selectedFiles.map((file) => URL.createObjectURL(file));
+    setAdditionalPreviews((prev) => [...prev, ...previewUrls]);
+    setUnsavedChanges(true);
+  };
+
+  const handleDeleteAdditionalImage = (index, previewUrl) => {
+    const updatedFiles = additionalFiles.filter((_, idx) => idx !== index);
+    const updatedPreviews = additionalPreviews.filter((_, idx) => idx !== index);
+    setAdditionalDeleted((prev) => {
+      if (!prev.includes(previewUrl)) {
+        return [...prev, previewUrl];
+      }
+      return prev;
+    });
+    setAdditionalFiles(updatedFiles);
+    setAdditionalPreviews(updatedPreviews);
+    setUnsavedChanges(true);
+  };
+
+  const saveForm = async () => {
+    if (isViewOnly) return { success: false };
+
     try {
+      if (!taskId) {
+        throw new Error("Task ID is required");
+      }
+
       const formDataToSend = new FormData();
-      // Append all form fields except the imageUrl field if no new files are added
       for (const key in formData) {
-        if (key === "imageUrl" && files.length === 0) continue;
         formDataToSend.append(key, formData[key]);
       }
-      // Append new files under "imageUrl"
-      if (files.length > 0) {
-        files.forEach((file) => {
-          formDataToSend.append("imageUrl", file);
+
+      formDataToSend.append("taskId", taskId);
+      formDataToSend.append("userId", user._id);
+
+      if (elevationFiles.length > 0) {
+        elevationFiles.forEach((file) => {
+          formDataToSend.append("elevationPhotos", file);
         });
       }
-      // Include deleted images in the request (as JSON)
-      if (deletedImages.length > 0) {
-        formDataToSend.append("deletedImages", JSON.stringify(deletedImages));
+      if (additionalFiles.length > 0) {
+        additionalFiles.forEach((file) => {
+          formDataToSend.append("additionalPhotos", file);
+        });
       }
 
-      let url = "http://localhost:3000/api/assessments/form-two";
-      let method = "POST";
-      if (docId) {
-        url = `http://localhost:3000/api/assessments/form-two/${docId}`;
-        method = "PUT";
+      if (elevationDeleted.length > 0) {
+        formDataToSend.append("deletedElevation", JSON.stringify(elevationDeleted));
+      }
+      if (additionalDeleted.length > 0) {
+        formDataToSend.append("deletedAdditional", JSON.stringify(additionalDeleted));
       }
 
-      const response = await fetch(url, { method, body: formDataToSend });
+      const url = docId
+        ? `http://localhost:3000/api/assessments/form-two/${docId}`
+        : "http://localhost:3000/api/assessments/form-two";
+      const method = docId ? "PUT" : "POST";
+
+      const response = await fetch(url, {
+        method,
+        credentials: "include",
+        body: formDataToSend,
+      });
       const data = await response.json();
+
       if (data.success) {
-        if (!docId && data.data && data.data._id) {
-          setDocId(data.data._id);
-        }
+        setDocId(data.data._id);
+        setSavedProcessId(data.data.processId);
         setIsUpdate(true);
         setUnsavedChanges(false);
         toast({
           title: "Success",
           description: `Form Two ${docId ? "updated" : "saved"} successfully!`,
         });
+        return { success: true, processId: data.data.processId };
       } else {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: data.error || "Save failed",
-        });
+        throw new Error(data.error || "Failed to save Form Two");
       }
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "An error occurred while saving Form Two",
+        description: error.message,
       });
       console.error("Save error:", error);
+      return { success: false, error: error.message };
     }
   };
 
-  // 8) Navigation: Next and Previous
-  const handleNext = () => {
-    if (unsavedChanges) {
-      toast({
-        variant: "warning",
-        title: "Unsaved changes",
-        description: "Please save before proceeding.",
-      });
-      return;
+  const handleSave = async () => {
+    const result = await saveForm();
+    if (result.success) {
+      if (user.role !== "surveyor") {
+        navigate(`/view-form/${result.processId}`);
+      } else {
+        navigate(`/process/${result.processId}/form-two?taskId=${taskId}`, { replace: true });
+      }
     }
-    // Navigate to Form Three (adjust the route as needed)
-    navigate(`/process/${processId}/form-three`);
   };
 
-  const handlePrevious = () => {
-    if (unsavedChanges) {
-      toast({
-        variant: "warning",
-        title: "Unsaved changes",
-        description: "Please save before navigating back.",
-      });
-      return;
+  const handleNext = async () => {
+    if (!isViewOnly) {
+      const result = await saveForm();
+      if (result.success) {
+        if (user.role === "surveyor") {
+          navigate(`/process/${result.processId}/form-three?taskId=${taskId}`);
+        } else {
+          navigate(`/view-form/${result.processId}/form-three?taskId=${taskId}`);
+        }
+      }
+    } else {
+      // In view mode, navigate to FormThree
+      navigate(`/view-form/${savedProcessId || urlProcessId}/form-three?taskId=${taskId}`);
     }
-    // Navigate to Form One (adjust the route as needed)
-    navigate(`/process/${processId}/form-one`);
+  };
+
+  const handlePrevious = async () => {
+    if (!isViewOnly) {
+      const result = await saveForm();
+      if (result.success) {
+        if (user.role === "surveyor") {
+          navigate(`/process/${result.processId}/form-one?taskId=${taskId}`);
+        } else {
+          navigate(`/view-form/${result.processId}/form-one?taskId=${taskId}`);
+        }
+      }
+    } else {
+      // In view mode, navigate to FormOne
+      navigate(`/view-form/${savedProcessId || urlProcessId}/form-one?taskId=${taskId}`);
+    }
   };
 
   return (
@@ -233,11 +277,11 @@ export default function FormTwo() {
         transition={{ duration: 0.5 }}
         className="bg-white w-full max-w-4xl p-8 rounded-lg shadow"
       >
-        <h1 className="text-2xl font-bold mb-6 text-center">Form Two: Property Details</h1>
-        
-        {/* Form Fields */}
+        <h1 className="text-2xl font-bold mb-6 text-center">
+          {isViewOnly ? "View Form Two" : "Form Two: Property Details"}
+        </h1>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-          {/* Property Tenure */}
           <div>
             <Label htmlFor="propertyTenure">Property Tenure</Label>
             <select
@@ -246,6 +290,7 @@ export default function FormTwo() {
               value={formData.propertyTenure}
               onChange={handleChange}
               className="w-full mt-1 border rounded px-2 py-2"
+              disabled={isViewOnly}
             >
               <option value="">- Select -</option>
               <option value="Owner-occupied">Owner-occupied</option>
@@ -253,7 +298,6 @@ export default function FormTwo() {
               <option value="Rented(private)">Rented(private)</option>
             </select>
           </div>
-          {/* Transaction Type */}
           <div>
             <Label htmlFor="transactionType">Transaction Type</Label>
             <select
@@ -262,6 +306,7 @@ export default function FormTwo() {
               value={formData.transactionType}
               onChange={handleChange}
               className="w-full mt-1 border rounded px-2 py-2"
+              disabled={isViewOnly}
             >
               <option value="">- Select -</option>
               <option value="Marketed Sale">Marketed Sale</option>
@@ -275,7 +320,6 @@ export default function FormTwo() {
               <option value="None of the above">None of the above</option>
             </select>
           </div>
-          {/* Property Type */}
           <div>
             <Label htmlFor="propertyType">Property Type</Label>
             <select
@@ -284,6 +328,7 @@ export default function FormTwo() {
               value={formData.propertyType}
               onChange={handleChange}
               className="w-full mt-1 border rounded px-2 py-2"
+              disabled={isViewOnly}
             >
               <option value="">- Select -</option>
               <option value="House">House</option>
@@ -299,7 +344,6 @@ export default function FormTwo() {
               <option value="Enclosed End-Terrace">Enclosed End-Terrace</option>
             </select>
           </div>
-          {/* Number of Storeys */}
           <div>
             <Label htmlFor="numberOfStoreys">Number of Storeys</Label>
             <Input
@@ -308,9 +352,9 @@ export default function FormTwo() {
               type="number"
               value={formData.numberOfStoreys}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
-          {/* Number of Habitable Rooms */}
           <div>
             <Label htmlFor="numberOfHabitableRooms">Number of Habitable Rooms</Label>
             <Input
@@ -319,9 +363,9 @@ export default function FormTwo() {
               type="number"
               value={formData.numberOfHabitableRooms}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
-          {/* Number of Heated Habitable Rooms */}
           <div>
             <Label htmlFor="numberOfHeatedHabitableRooms">Number of Heated Habitable Rooms</Label>
             <Input
@@ -330,9 +374,9 @@ export default function FormTwo() {
               type="number"
               value={formData.numberOfHeatedHabitableRooms}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
-          {/* Main Property Date Band */}
           <div>
             <Label htmlFor="mainPropertyDateBand">Main Property Date Band</Label>
             <select
@@ -341,6 +385,7 @@ export default function FormTwo() {
               value={formData.mainPropertyDateBand}
               onChange={handleChange}
               className="w-full mt-1 border rounded px-2 py-2"
+              disabled={isViewOnly}
             >
               <option value="">- Select -</option>
               <option value="(A) before 1900">(A) before 1900</option>
@@ -357,7 +402,6 @@ export default function FormTwo() {
               <option value="(L) 2012 onwards">(L) 2012 onwards</option>
             </select>
           </div>
-          {/* Main Property Room/s in Roof Date Band */}
           <div>
             <Label htmlFor="mainPropertyRoomInRoofDateBand">
               Main Property Room/s in Roof Date Band
@@ -368,17 +412,18 @@ export default function FormTwo() {
               placeholder="e.g. 1900-1929"
               value={formData.mainPropertyRoomInRoofDateBand}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
-          {/* Elevation Photos Dropdown */}
           <div>
-            <Label htmlFor="elevationPhotos">Select Elevation Photos (recommended)</Label>
+            <Label htmlFor="elevationPhotoSelection">Select Elevation Photos (recommended)</Label>
             <select
-              id="elevationPhotos"
-              name="elevationPhotos"
-              value={formData.elevationPhotos}
+              id="elevationPhotoSelection"
+              name="elevationPhotoSelection"
+              value={formData.elevationPhotoSelection}
               onChange={handleChange}
               className="w-full mt-1 border rounded px-2 py-2"
+              disabled={isViewOnly}
             >
               <option value="">- Select -</option>
               <option value="Front">Front</option>
@@ -386,35 +431,75 @@ export default function FormTwo() {
               <option value="Side (if applicable)">Side (if applicable)</option>
             </select>
           </div>
-          {/* Upload Elevation Photos */}
-          <div>
+          <div className="mb-6">
             <Label>Upload Elevation Photos</Label>
-            <div className="flex flex-col gap-2">
-              <Button onClick={() => document.getElementById("fileInput").click()}>
-                Upload Photo(s)
+            <div className="flex flex-col gap-2 mt-2">
+              <Button
+                onClick={() => document.getElementById("elevationInput").click()}
+                disabled={isViewOnly}
+              >
+                Choose Photos
               </Button>
               <input
-                id="fileInput"
+                id="elevationInput"
                 type="file"
                 accept="image/*, application/pdf"
                 multiple
-                name="imageUrl" // This field will hold multiple images
-                onChange={handleFileChange}
+                name="elevationPhotos"
+                onChange={handleElevationFileChange}
                 className="hidden"
               />
             </div>
-            {/* Render multiple image previews */}
-            {imagePreviews.length > 0 && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                {imagePreviews.map((preview, index) => (
+            {elevationPreviews.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {elevationPreviews.map((preview, index) => (
                   <div key={index} className="relative">
-                    <img src={preview} alt="Preview" className="w-32 h-32 object-cover rounded" />
-                    <button
-                      onClick={() => handleDeleteImage(index, preview)}
-                      className="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1"
-                    >
-                      ✕
-                    </button>
+                    <img src={preview} alt="Elevation Preview" className="w-32 h-32 object-cover rounded" />
+                    {!isViewOnly && (
+                      <button
+                        onClick={() => handleDeleteElevationImage(index, preview)}
+                        className="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="mb-6">
+            <Label>Additional Photos (optional)</Label>
+            <div className="flex flex-col gap-2 mt-2">
+              <Button
+                onClick={() => document.getElementById("additionalInput").click()}
+                disabled={isViewOnly}
+              >
+                Choose Photos
+              </Button>
+              <input
+                id="additionalInput"
+                type="file"
+                accept="image/*, application/pdf"
+                multiple
+                name="additionalPhotos"
+                onChange={handleAdditionalFileChange}
+                className="hidden"
+              />
+            </div>
+            {additionalPreviews.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {additionalPreviews.map((preview, index) => (
+                  <div key={index} className="relative">
+                    <img src={preview} alt="Additional Preview" className="w-32 h-32 object-cover rounded" />
+                    {!isViewOnly && (
+                      <button
+                        onClick={() => handleDeleteAdditionalImage(index, preview)}
+                        className="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -422,15 +507,27 @@ export default function FormTwo() {
           </div>
         </div>
 
-        {/* Navigation Buttons */}
-        <div className="flex justify-between mt-6">
+        <div className="flex justify-between mt-6 space-x-2">
           <Button variant="outline" onClick={handlePrevious}>
             Previous
           </Button>
-          <Button onClick={handleSave}>{isUpdate ? "Update" : "Save"}</Button>
-          <Button variant="outline" onClick={handleNext}>
-            Next
-          </Button>
+          {isViewOnly ? (
+            <>
+              <Button variant="outline" onClick={() => navigate("/dashboard")}>
+                Back to Dashboard
+              </Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={handleSave}>{isUpdate ? "Update" : "Save"}</Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          )}
         </div>
       </motion.div>
     </div>

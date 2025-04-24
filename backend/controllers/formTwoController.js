@@ -1,136 +1,200 @@
-import { FormTwo } from "../model/FormTwo.js";
-import path from "path";
-import fs from "fs";
 
-// Create Form Two with multiple image uploads
+
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { Task } from "../model/task.js";
+import { Process } from "../model/process.js";
+import {FormTwo } from "../model/FormTwo.js"
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export const createFormTwo = async (req, res) => {
   try {
-    const { userId, ...formData } = req.body;
-    const filePaths = [];
+    const {
+      taskId,
+      propertyTenure,
+      transactionType,
+      propertyType,
+      numberOfStoreys,
+      numberOfHabitableRooms,
+      numberOfHeatedHabitableRooms,
+      mainPropertyDateBand,
+      mainPropertyRoomInRoofDateBand,
+      elevationPhotoSelection, // Updated from elevationPhotos
+    } = req.body;
+    const surveyorId = req.user._id;
 
-    // If files are uploaded, store their paths in imageUrl array
-    if (req.files) {
-      req.files.forEach((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-two", file.filename);
-        filePath = filePath.replace(/\\/g, "/");
-        filePaths.push(filePath);
-      });
-      formData.imageUrl = filePaths;
+    // Validate task and user
+    const task = await Task.findById(taskId);
+    if (!task || task.assignedTo.toString() !== surveyorId.toString()) {
+      return res.status(403).json({ success: false, error: "Unauthorized or task not found" });
     }
 
-    const newForm = new FormTwo({ ...formData, userId });
-    await newForm.save();
+    // Check or create a Process
+    let process = await Process.findOne({ taskId, surveyorId });
+    if (!process) {
+      process = new Process({
+        taskId,
+        surveyorId,
+        formType: "formTwo",
+        formData: new Map(),
+        status: "in-progress",
+      });
+      await process.save();
+      task.processId = process._id;
+      task.status = "in_progress";
+      await task.save();
+    }
+
+    // Handle file uploads for elevation and additional photos
+    const elevationPhotos = req.files["elevationPhotos"]
+      ? req.files["elevationPhotos"].map((file) =>
+          path.join("uploads", `user-${surveyorId}`, "form-two", file.filename).replace(/\\/g, "/")
+        )
+      : [];
+    const additionalPhotos = req.files["additionalPhotos"]
+      ? req.files["additionalPhotos"].map((file) =>
+          path.join("uploads", `user-${surveyorId}`, "form-two", file.filename).replace(/\\/g, "/")
+        )
+      : [];
+
+    const formTwo = new FormTwo({
+      processId: process._id,
+      taskId,
+      surveyorId,
+      propertyTenure,
+      transactionType,
+      propertyType,
+      numberOfStoreys,
+      numberOfHabitableRooms,
+      numberOfHeatedHabitableRooms,
+      mainPropertyDateBand,
+      mainPropertyRoomInRoofDateBand,
+      elevationPhotoSelection, // Updated from elevationPhotos
+      elevationPhotos,
+      additionalPhotos,
+    });
+    await formTwo.save();
 
     return res.status(201).json({
       success: true,
       message: "Form Two created successfully",
-      data: newForm,
+      data: formTwo,
     });
   } catch (error) {
-    console.error("Error creating Form Two:", error);
-    return res.status(500).json({ success: false, error: "Internal Server Error" });
+    console.error("Error creating FormTwo:", error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 };
 
-// Update Form Two with multiple image uploads and deletion functionalities
+export const getFormTwo = async (req, res) => {
+  try {
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
+    }
+
+    const formTwo = await FormTwo.findOne({ processId });
+    if (!formTwo) {
+      return res.status(404).json({ success: false, error: "Form Two not found" });
+    }
+
+    return res.status(200).json({ success: true, data: formTwo });
+  } catch (error) {
+    console.error("Error fetching FormTwo:", error);
+    return res.status(400).json({ success: false, error: error.message });
+  }
+};
+
 export const updateFormTwo = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, ...formData } = req.body;
+    const {
+      propertyTenure,
+      transactionType,
+      propertyType,
+      numberOfStoreys,
+      numberOfHabitableRooms,
+      numberOfHeatedHabitableRooms,
+      mainPropertyDateBand,
+      mainPropertyRoomInRoofDateBand,
+      elevationPhotoSelection, // Updated from elevationPhotos
+      deletedElevation,
+      deletedAdditional,
+    } = req.body;
+    const surveyorId = req.user._id;
 
-    // Parse deletedImages (it might be sent as a JSON string or an array)
-    let deletedImages = [];
-    if (req.body.deletedImages) {
-      if (typeof req.body.deletedImages === "string") {
-        try {
-          deletedImages = JSON.parse(req.body.deletedImages);
-        } catch (error) {
-          deletedImages = [req.body.deletedImages];
-        }
-      } else {
-        deletedImages = req.body.deletedImages;
-      }
+    const formTwo = await FormTwo.findById(id);
+    if (!formTwo || formTwo.surveyorId.toString() !== surveyorId.toString()) {
+      return res.status(403).json({ success: false, error: "Unauthorized or form not found" });
     }
 
-    // Convert absolute URLs to relative paths (remove base URL)
-    const relativeDeletedImages = deletedImages.map(img => 
-      img.replace("http://localhost:3000/", "")
-    );
-
-    // Fetch the existing document from the database
-    const existingForm = await FormTwo.findById(id);
-    if (!existingForm) {
-      return res.status(404).json({ success: false, message: "Form Two not found" });
-    }
-
-    // Remove images marked for deletion from the existing imageUrl array
-    let updatedImages = existingForm.imageUrl.filter(image => 
-      !relativeDeletedImages.includes(image)
-    );
-
-    // Delete physical files from the server for each deleted image
-    relativeDeletedImages.forEach((imgPath) => {
-      if (imgPath && imgPath.trim()) {
-        const filePath = path.join(process.cwd(), imgPath);
+    // Handle deleted elevation photos
+    if (deletedElevation) {
+      const deletedElevationArray = JSON.parse(deletedElevation);
+      deletedElevationArray.forEach((url) => {
+        const filePath = path.join(__dirname, "..", url.replace("http://localhost:3000/", ""));
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log(`Deleted file: ${filePath}`);
-        } else {
-          console.log(`File not found: ${filePath}`);
         }
-      }
-    });
-
-    // Process newly uploaded files (if any)
-    let newImages = [];
-    if (req.files && req.files.length > 0) {
-      newImages = req.files.map((file) => {
-        let filePath = path.join("uploads", `user-${userId}`, "form-two", file.filename);
-        return filePath.replace(/\\/g, "/");
       });
+      formTwo.elevationPhotos = formTwo.elevationPhotos.filter(
+        (photo) => !deletedElevationArray.includes(`http://localhost:3000/${photo}`)
+      );
     }
 
-    // Combine the remaining images with the newly uploaded ones
-    updatedImages = [...updatedImages, ...newImages];
+    // Handle deleted additional photos
+    if (deletedAdditional) {
+      const deletedAdditionalArray = JSON.parse(deletedAdditional);
+      deletedAdditionalArray.forEach((url) => {
+        const filePath = path.join(__dirname, "..", url.replace("http://localhost:3000/", ""));
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      });
+      formTwo.additionalPhotos = formTwo.additionalPhotos.filter(
+        (photo) => !deletedAdditionalArray.includes(`http://localhost:3000/${photo}`)
+      );
+    }
 
-    // Prepare the update object (do not store deletedImages in database)
-    const updateData = {
-      ...formData,
-      userId,
-      imageUrl: updatedImages,
-    };
+    // Append new elevation photos
+    if (req.files["elevationPhotos"]) {
+      const newElevationPhotos = req.files["elevationPhotos"].map((file) =>
+        path.join("uploads", `user-${surveyorId}`, "form-two", file.filename).replace(/\\/g, "/")
+      );
+      formTwo.elevationPhotos = [...formTwo.elevationPhotos, ...newElevationPhotos];
+    }
 
-    // Update the document and return the updated record
-    const updatedForm = await FormTwo.findByIdAndUpdate(id, updateData, { new: true });
+    // Append new additional photos
+    if (req.files["additionalPhotos"]) {
+      const newAdditionalPhotos = req.files["additionalPhotos"].map((file) =>
+        path.join("uploads", `user-${surveyorId}`, "form-two", file.filename).replace(/\\/g, "/")
+      );
+      formTwo.additionalPhotos = [...formTwo.additionalPhotos, ...newAdditionalPhotos];
+    }
+
+    // Update form fields
+    formTwo.propertyTenure = propertyTenure;
+    formTwo.transactionType = transactionType;
+    formTwo.propertyType = propertyType;
+    formTwo.numberOfStoreys = numberOfStoreys;
+    formTwo.numberOfHabitableRooms = numberOfHabitableRooms;
+    formTwo.numberOfHeatedHabitableRooms = numberOfHeatedHabitableRooms;
+    formTwo.mainPropertyDateBand = mainPropertyDateBand;
+    formTwo.mainPropertyRoomInRoofDateBand = mainPropertyRoomInRoofDateBand;
+    formTwo.elevationPhotoSelection = elevationPhotoSelection; // Updated from elevationPhotos
+
+    await formTwo.save();
 
     return res.status(200).json({
       success: true,
       message: "Form Two updated successfully",
-      data: updatedForm,
+      data: formTwo,
     });
   } catch (error) {
-    console.error("Error updating Form Two:", error);
-    return res.status(500).json({ success: false, error: "Internal Server Error" });
-  }
-};
-
-// Get Form Two data for a given userId and optionally processId
-export const getFormTwoByUser = async (req, res) => {
-  try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
-    }
-
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
-    }
-
-    const forms = await FormTwo.find(query);
-    return res.status(200).json({ success: true, data: forms });
-  } catch (error) {
-    console.error("Error fetching Form Two data:", error);
-    return res.status(500).json({ success: false, error: "Internal Server Error" });
+    console.error("Error updating FormTwo:", error);
+    return res.status(400).json({ success: false, error: error.message });
   }
 };

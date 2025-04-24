@@ -1,25 +1,39 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { User, Mail, Lock } from "lucide-react";
+import { User, Mail, Lock, Shield } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/store/authStore";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/use-toast";
 
 export default function SignUpPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("viewer"); // Default role
 
-  const { signup, isLoading, error, user } = useAuthStore();
-   console.log(user);
-   const navigate = useNavigate();
-   
+  const { signup, isLoading, error } = useAuthStore();
+  const navigate = useNavigate();
+  const { toast } = useToast();
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    await signup(email, password, name);
-    navigate("/verify-email");  
+    try {
+      await signup(email, password, name, role);
+      toast({
+        title: "Success",
+        description: "Account created successfully! Please log in.",
+      });
+      navigate("/login"); // Redirect to login instead of verify-email
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: err.message || "Failed to sign up",
+      });
+    }
   };
 
   const inputVariants = {
@@ -36,6 +50,7 @@ export default function SignUpPage() {
       >
         <h1 className="text-2xl font-bold mb-6 text-center">Sign Up</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Name Field */}
           <div className="space-y-2">
             <Label htmlFor="name">Name</Label>
             <motion.div whileFocus="focus" variants={inputVariants}>
@@ -56,6 +71,8 @@ export default function SignUpPage() {
               </div>
             </motion.div>
           </div>
+
+          {/* Email Field */}
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <motion.div whileFocus="focus" variants={inputVariants}>
@@ -76,6 +93,8 @@ export default function SignUpPage() {
               </div>
             </motion.div>
           </div>
+
+          {/* Password Field */}
           <div className="space-y-2">
             <Label htmlFor="password">Password</Label>
             <motion.div whileFocus="focus" variants={inputVariants}>
@@ -96,12 +115,49 @@ export default function SignUpPage() {
               </div>
             </motion.div>
           </div>
+
+          {/* Role Selection */}
+          <div className="space-y-2">
+            <Label htmlFor="role">Role</Label>
+            <motion.div whileFocus="focus" variants={inputVariants}>
+              <div className="relative">
+                <Shield
+                  className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                  size={18}
+                />
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  required
+                >
+                  <option value="viewer">Viewer</option>
+                  <option value="surveyor">Surveyor</option>
+                  <option value="manager">Manager</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </motion.div>
+          </div>
+
+          {/* Error Message */}
           {error && <p className="text-red-500 text-sm">{error}</p>}
+
+          {/* Submit Button */}
           <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
             <Button type="submit" className="w-full" disabled={isLoading}>
               {isLoading ? "Loading..." : "Sign Up"}
             </Button>
           </motion.div>
+
+          {/* Link to Login */}
+          <p className="text-center text-sm text-gray-600">
+            Already have an account?{" "}
+            <a href="/login" className="text-blue-500 hover:underline">
+              Log in
+            </a>
+          </p>
         </form>
       </motion.div>
     </div>

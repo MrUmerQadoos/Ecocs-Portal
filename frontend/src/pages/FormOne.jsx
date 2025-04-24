@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,137 +9,154 @@ import { useAuthStore } from "@/store/authStore";
 
 export default function FormOne() {
   const navigate = useNavigate();
-  const { processId } = useParams(); // extract processId from URL (e.g., /process/:processId/form-one)
+  const { processId: urlProcessId } = useParams();
+  const location = useLocation();
   const { toast } = useToast();
-  const { user } = useAuthStore(); // the logged-in user from your auth store
+  const { user } = useAuthStore();
 
-  // State for document ID, unsaved changes, and update flag.
-  const [docId, setDocId] = useState(null);
-  const [unsavedChanges, setUnsavedChanges] = useState(false);
-  const [isUpdate, setIsUpdate] = useState(false);
-
-  // Form state includes processId along with userId and other fields.
   const [formData, setFormData] = useState({
     propertyAddress: "",
     postcode: "",
     inspectionDate: "",
-    surveyorName: "",
-    surveyorID: "",
+    surveyorName: user?.name || "",
+    surveyorID: user?._id || "",
     epcRRN: "",
-    userId: "",
-    processId: processId || "", // processId from URL
   });
+  const [formId, setFormId] = useState(null);
+  const [taskId, setTaskId] = useState(null);
+  const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const [isViewOnly, setIsViewOnly] = useState(false);
+  const [savedProcessId, setSavedProcessId] = useState(null);
 
-  // Update formData with userId and processId when available.
+  // Determine mode (edit or view) and load existing data
   useEffect(() => {
-    if (user && user._id) {
-      setFormData(prev => ({ ...prev, userId: user._id, processId }));
-    }
-  }, [user, processId]);
+    const isViewing = location.pathname.includes("/view-form");
+    setIsViewOnly(isViewing || user.role !== "surveyor");
+    const queryTaskId = new URLSearchParams(location.search).get("taskId");
+    setTaskId(queryTaskId);
 
-  // On component mount, if a user is logged in, fetch saved Form One data for this process.
-  useEffect(() => {
-    if (user && user._id && processId) {
-      // Adjust endpoint to also filter by processId if your backend supports it.
-      fetch(`http://localhost:3000/api/assessments/form-one?userId=${user._id}&processId=${processId}`)
+    if (urlProcessId && urlProcessId !== "new") {
+      fetch(`http://localhost:3000/api/assessments/form-one?processId=${urlProcessId}`, {
+        method: "GET",
+        credentials: "include",
+      })
         .then((res) => res.json())
         .then((data) => {
-          // Assuming your endpoint returns an array of documents for this process.
-          if (data.success && data.data && data.data.length > 0) {
-            const existingForm = data.data[0];
-            setFormData(existingForm);
-            setDocId(existingForm._id);
-            setIsUpdate(true);
+          if (data.success && data.data) {
+            setFormData(data.data);
+            setFormId(data.data._id);
+            setSavedProcessId(data.data.processId);
           }
         })
         .catch((error) => {
           toast({
             variant: "destructive",
             title: "Error",
-            description: "Error fetching saved data.",
+            description: "Failed to load Form One data.",
           });
           console.error("Fetch error:", error);
         });
     }
-  }, [user, processId, toast]);
+  }, [urlProcessId, user, location, toast]);
 
-  // Warn user before leaving the page if there are unsaved changes.
+  // Warn about unsaved changes
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      if (unsavedChanges) {
+      if (unsavedChanges && !isViewOnly) {
         e.preventDefault();
-        e.returnValue = "You have unsaved changes. If you leave, your data will be lost.";
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [unsavedChanges]);
+  }, [unsavedChanges, isViewOnly]);
 
-  // Handle input changes.
   const handleChange = (e) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
       [e.target.name]: e.target.value,
-      userId: user ? user._id : "",
-      processId, // always include processId
     }));
     setUnsavedChanges(true);
   };
 
-  // Save the form: POST if new, PUT if updating.
-  const handleSave = async () => {
+  const saveForm = async () => {
+    if (isViewOnly) return { success: false };
+
     try {
-      let url = "http://localhost:3000/api/assessments/form-one";
-      let method = "POST";
-      if (docId) {
-        url = `http://localhost:3000/api/assessments/form-one/${docId}`;
-        method = "PUT";
+      if (!taskId) {
+        throw new Error("Task ID is required");
       }
+
+      const url = formId
+        ? `http://localhost:3000/api/assessments/form-one/${formId}`
+        : "http://localhost:3000/api/assessments/form-one";
+      const method = formId ? "PUT" : "POST";
+
       const response = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        credentials: "include",
+        body: JSON.stringify({ taskId, ...formData }),
       });
       const data = await response.json();
+
       if (data.success) {
-        // On creation, update docId from response.
-        if (!docId && data.data && data.data._id) {
-          setDocId(data.data._id);
-        }
-        setIsUpdate(true);
+        setFormId(data.data._id);
+        setSavedProcessId(data.data.processId);
         setUnsavedChanges(false);
         toast({
           title: "Success",
-          description: `Form One ${docId ? "updated" : "saved"} successfully!`,
+          description: `Form One ${formId ? "updated" : "saved"} successfully!`,
         });
+        return { success: true, processId: data.data.processId };
       } else {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: data.error || "Save failed",
-        });
+        throw new Error(data.error || "Failed to save Form One");
       }
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "An error occurred while saving Form One",
+        description: error.message,
       });
       console.error("Save error:", error);
+      return { success: false, error: error.message };
     }
   };
 
-  // Next button: if unsaved changes exist, warn; otherwise, navigate to Form Two with the same processId.
-  const handleNext = () => {
-    if (unsavedChanges) {
-      toast({
-        variant: "warning",
-        title: "Unsaved changes",
-        description: "Please save before proceeding.",
-      });
-      return;
+  const handleSave = async () => {
+    const result = await saveForm();
+    if (result.success) {
+      if (user.role !== "surveyor") {
+        // For admin, manager, viewer: redirect to view page
+        navigate(`/view-form/${result.processId}`);
+      } else {
+        // For surveyor: stay on the form page, update the URL
+        navigate(`/process/${result.processId}/form-one?taskId=${taskId}`, { replace: true });
+      }
     }
-    navigate(`/process/${processId}/form-two`);
+  };
+
+  const handleNext = async () => {
+    if (!isViewOnly) {
+      const result = await saveForm();
+      if (result.success) {
+        if (user.role === "surveyor") {
+          // For surveyor: navigate to FormTwo
+          navigate(`/process/${result.processId}/form-two?taskId=${taskId}`);
+        } else {
+          // For admin, manager, viewer: redirect to view page
+          navigate(`/view-form/${result.processId}/form-two?taskId=${taskId}`);
+        }
+      }
+    } else {
+      // In view mode, navigate to FormTwo
+      navigate(`/view-form/${savedProcessId || urlProcessId}/form-two?taskId=${taskId}`);
+    }
+  };
+
+  const handlePrevious = () => {
+    // Since this is FormOne, "Previous" goes back to the dashboard
+    navigate("/dashboard");
   };
 
   return (
@@ -151,9 +168,8 @@ export default function FormOne() {
         className="bg-white w-full max-w-3xl p-8 rounded-lg shadow"
       >
         <h1 className="text-2xl font-bold mb-6 text-center">
-          RdSAP Assessment Form England &amp; Wales v9.94
+          {isViewOnly ? "View Form One" : "RdSAP Assessment Form England & Wales v9.94"}
         </h1>
-        {/* Responsive Grid for the Inputs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           <div>
             <Label htmlFor="propertyAddress">Property Address</Label>
@@ -163,6 +179,7 @@ export default function FormOne() {
               placeholder="Enter property address"
               value={formData.propertyAddress}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
           <div>
@@ -173,6 +190,7 @@ export default function FormOne() {
               placeholder="Enter postcode"
               value={formData.postcode}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
           <div>
@@ -183,6 +201,7 @@ export default function FormOne() {
               type="date"
               value={formData.inspectionDate}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
           <div>
@@ -193,6 +212,7 @@ export default function FormOne() {
               placeholder="Enter surveyor name"
               value={formData.surveyorName}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
           <div>
@@ -203,6 +223,7 @@ export default function FormOne() {
               placeholder="Enter surveyor ID"
               value={formData.surveyorID}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
           <div>
@@ -213,18 +234,31 @@ export default function FormOne() {
               placeholder="Enter EPC RRN"
               value={formData.epcRRN}
               onChange={handleChange}
+              disabled={isViewOnly}
             />
           </div>
         </div>
-
-        {/* Buttons */}
-        <div className="flex justify-between mt-6">
-          <Button onClick={handleSave}>
-            {isUpdate ? "Update" : "Save"}
+        <div className="flex justify-between mt-6 space-x-2">
+          <Button variant="outline" onClick={handlePrevious}>
+            Previous
           </Button>
-          <Button variant="outline" onClick={handleNext}>
-            Next
-          </Button>
+          {isViewOnly ? (
+            <>
+              <Button variant="outline" onClick={() => navigate("/dashboard")}>
+                Back to Dashboard
+              </Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={handleSave}>{formId ? "Update" : "Save"}</Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          )}
         </div>
       </motion.div>
     </div>

@@ -1,24 +1,33 @@
 import path from "path";
-import fs from "fs"; // File system for deleting images
-import { FormEight } from "../model/FormEight.js";
+import fs from "fs";
+import { FormEight } from "../model/formEight.js";
 
 // Create a new Form Eight
 export const createFormEight = async (req, res) => {
   try {
-    const { userId, ...formData } = req.body;
+    const { processId } = req.body;
+
+    // Check if a FormEight document already exists for this processId
+    const existingForm = await FormEight.findOne({ processId });
+    if (existingForm) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Eight document already exists for this process.",
+      });
+    }
+
+    const formData = req.body;
     const filePaths = {
       constructionPhotos: [],
       loftInsulationPhotos: [],
     };
 
-    // Check if files are uploaded for each field
+    // Handle file uploads for each group
     if (req.files) {
       for (let field in req.files) {
         req.files[field].forEach((file) => {
-          let filePath = path.join("uploads", `user-${userId}`, "form-eight", file.filename);
-          filePath = filePath.replace(/\\/g, "/"); // Convert Windows paths to forward slashes
-
-          // Map the file to the corresponding photo array
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-eight", file.filename);
+          filePath = filePath.replace(/\\/g, "/");
           if (field === "constructionPhotos") {
             filePaths.constructionPhotos.push(filePath);
           } else if (field === "loftInsulationPhotos") {
@@ -28,8 +37,7 @@ export const createFormEight = async (req, res) => {
       }
     }
 
-    // Create and save the Form Eight document
-    const newForm = new FormEight({ ...formData, userId, ...filePaths });
+    const newForm = new FormEight({ ...formData, ...filePaths });
     await newForm.save();
 
     return res.status(201).json({
@@ -39,25 +47,29 @@ export const createFormEight = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating Form Eight:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Eight document already exists for this process.",
+      });
+    }
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };
 
-// Get Form Eight data by userId and processId
-export const getFormEightByUser = async (req, res) => {
+// Get Form Eight data by processId
+export const getFormEightByProcess = async (req, res) => {
   try {
-    const { userId, processId } = req.query;
-    if (!userId) {
-      return res.status(400).json({ success: false, error: "User ID is required" });
+    const { processId } = req.query;
+    if (!processId) {
+      return res.status(400).json({ success: false, error: "Process ID is required" });
     }
 
-    const query = { userId };
-    if (processId) {
-      query.processId = processId;
-    }
-
-    const forms = await FormEight.find(query);
-    return res.status(200).json({ success: true, data: forms });
+    const form = await FormEight.findOne({ processId });
+    return res.status(200).json({ success: true, data: form ? [form] : [] });
   } catch (error) {
     console.error("Error fetching Form Eight data:", error);
     return res.status(500).json({ success: false, error: "Internal Server Error" });
@@ -68,80 +80,98 @@ export const getFormEightByUser = async (req, res) => {
 export const updateFormEight = async (req, res) => {
   try {
     const { id } = req.params;
-    const { userId, ...otherData } = req.body;
+    const formData = req.body;
 
-    // Parse deleted images arrays from the request
-    const deletedImages = {
-      constructionPhotos: JSON.parse(req.body.deletedConstruction || "[]"),
-      loftInsulationPhotos: JSON.parse(req.body.deletedLoftInsulation || "[]"),
-    };
+    // Parse deleted images for each group
+    let deletedConstruction = [];
+    let deletedLoftInsulation = [];
 
-    // Fetch the existing Form Eight document
+    if (req.body.deletedConstruction) {
+      deletedConstruction =
+        typeof req.body.deletedConstruction === "string"
+          ? JSON.parse(req.body.deletedConstruction)
+          : req.body.deletedConstruction;
+    }
+    if (req.body.deletedLoftInsulation) {
+      deletedLoftInsulation =
+        typeof req.body.deletedLoftInsulation === "string"
+          ? JSON.parse(req.body.deletedLoftInsulation)
+          : req.body.deletedLoftInsulation;
+    }
+
+    // Convert absolute URLs to relative paths for comparison
+    const relativeDeletedConstruction = deletedConstruction.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+    const relativeDeletedLoftInsulation = deletedLoftInsulation.map((img) =>
+      img.replace("http://localhost:3000/", "")
+    );
+
+    // Fetch the existing document
     const existingForm = await FormEight.findById(id);
     if (!existingForm) {
       return res.status(404).json({ success: false, message: "Form Eight not found" });
     }
 
-    // Convert absolute URLs to relative paths for comparison
-    const relativeDeletedImages = {
-      constructionPhotos: deletedImages.constructionPhotos.map(
-        (url) => url.replace("http://localhost:3000/", "")
-      ),
-      loftInsulationPhotos: deletedImages.loftInsulationPhotos.map(
-        (url) => url.replace("http://localhost:3000/", "")
-      ),
-    };
+    // Remove deleted images from existing arrays
+    let updatedConstructionPhotos = existingForm.constructionPhotos.filter(
+      (photo) => !relativeDeletedConstruction.includes(photo)
+    );
+    let updatedLoftInsulationPhotos = existingForm.loftInsulationPhotos.filter(
+      (photo) => !relativeDeletedLoftInsulation.includes(photo)
+    );
 
-    // Remove deleted images from the existing photos arrays
-    const updatedPhotos = {
-      constructionPhotos: existingForm.constructionPhotos.filter(
-        (photo) => !relativeDeletedImages.constructionPhotos.includes(photo)
-      ),
-      loftInsulationPhotos: existingForm.loftInsulationPhotos.filter(
-        (photo) => !relativeDeletedImages.loftInsulationPhotos.includes(photo)
-      ),
-    };
-
-    // Delete the physical files from the server
-    const deleteImage = (imageUrl) => {
-      const relativePath = imageUrl.replace("http://localhost:3000/", "");
-      const filePath = path.join(process.cwd(), relativePath);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        console.log(`Deleted file: ${filePath}`);
-      } else {
-        console.log(`File not found: ${filePath}`);
+    // Delete physical files from the server
+    const deleteImage = (relativeImg) => {
+      if (relativeImg && relativeImg.trim()) {
+        const filePath = path.join(process.cwd(), relativeImg);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`Deleted file: ${filePath}`);
+        } else {
+          console.log(`File not found: ${filePath}`);
+        }
       }
     };
 
-    relativeDeletedImages.constructionPhotos.forEach(deleteImage);
-    relativeDeletedImages.loftInsulationPhotos.forEach(deleteImage);
+    relativeDeletedConstruction.forEach(deleteImage);
+    relativeDeletedLoftInsulation.forEach(deleteImage);
 
-    // Handle new file uploads and add them to the arrays
-    const newFilePaths = {
-      constructionPhotos: req.files?.constructionPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-eight", file.filename)
-      ) || [],
-      loftInsulationPhotos: req.files?.loftInsulationPhotos?.map(
-        (file) => path.join("uploads", `user-${userId}`, "form-eight", file.filename)
-      ) || [],
+    // Process new file uploads
+    let newConstructionPhotos = [];
+    let newLoftInsulationPhotos = [];
+
+    if (req.files) {
+      if (req.files.constructionPhotos) {
+        newConstructionPhotos = req.files.constructionPhotos.map((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-eight", file.filename);
+          return filePath.replace(/\\/g, "/");
+        });
+      }
+      if (req.files.loftInsulationPhotos) {
+        newLoftInsulationPhotos = req.files.loftInsulationPhotos.map((file) => {
+          let filePath = path.join("uploads", `user-${formData.userId}`, "form-eight", file.filename);
+          return filePath.replace(/\\/g, "/");
+        });
+      }
+    }
+
+    // Combine remaining images with new uploads
+    updatedConstructionPhotos = [...updatedConstructionPhotos, ...newConstructionPhotos];
+    updatedLoftInsulationPhotos = [...updatedLoftInsulationPhotos, ...newLoftInsulationPhotos];
+
+    // Prepare the update object
+    const updateData = {
+      ...formData,
+      constructionPhotos: updatedConstructionPhotos,
+      loftInsulationPhotos: updatedLoftInsulationPhotos,
     };
 
-    // Merge new file paths with existing ones
-    updatedPhotos.constructionPhotos.push(...newFilePaths.constructionPhotos);
-    updatedPhotos.loftInsulationPhotos.push(...newFilePaths.loftInsulationPhotos);
-
-    // Update the Form Eight document
-    const updatedForm = await FormEight.findByIdAndUpdate(
-      id,
-      {
-        ...otherData,
-        userId,
-        constructionPhotos: updatedPhotos.constructionPhotos,
-        loftInsulationPhotos: updatedPhotos.loftInsulationPhotos,
-      },
-      { new: true }
-    );
+    // Update the document
+    const updatedForm = await FormEight.findByIdAndUpdate(id, updateData, {
+      new: true,
+      runValidators: true,
+    });
 
     return res.status(200).json({
       success: true,
@@ -150,6 +180,15 @@ export const updateFormEight = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating Form Eight:", error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        error: "A Form Eight document already exists for this process.",
+      });
+    }
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ success: false, error: error.message });
+    }
     return res.status(500).json({ success: false, error: "Internal Server Error" });
   }
 };

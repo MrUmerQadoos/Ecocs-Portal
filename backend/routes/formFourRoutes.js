@@ -1,22 +1,39 @@
-// routes/formFourRoutes.js
-
 import express from "express";
 import {
   createFormFour,
-  getFormFourByUser,
+  getFormFourByProcess,
   updateFormFour,
 } from "../controllers/formFourController.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { restrictTo } from "../middleware/roleMiddleware.js";
 import upload from "../utils/fileUpload.js";
 
 const router = express.Router();
 
-// Get Form Four data (by userId & optional processId)
-router.get("/", getFormFourByUser);
+// Create Form Four (surveyor only)
+router.post(
+  "/",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.array("photoThermalSeparation"),
+  createFormFour
+);
 
-// Create a new Form Four (with file upload)
-router.post("/", upload.array("photoThermalSeparation"), createFormFour);
+// Get Form Four (all roles can view)
+router.get(
+  "/",
+  verifyToken,
+  restrictTo("admin", "manager", "surveyor", "viewer"),
+  getFormFourByProcess
+);
 
-// Update Form Four (with file upload)
-router.put("/:id", upload.array("photoThermalSeparation"), updateFormFour);
+// Update Form Four (surveyor only)
+router.put(
+  "/:id",
+  verifyToken,
+  restrictTo("surveyor"),
+  upload.array("photoThermalSeparation"),
+  updateFormFour
+);
 
 export default router;

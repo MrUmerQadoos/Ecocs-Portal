@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -9,191 +9,216 @@ import { useAuthStore } from "@/store/authStore";
 
 export default function FormThree() {
   const navigate = useNavigate();
-  const { processId } = useParams(); // read processId from the URL
+  const { processId: urlProcessId } = useParams();
+  const location = useLocation();
   const { toast } = useToast();
   const { user } = useAuthStore();
 
-  // Document ID and unsaved-changes tracking
-  const [docId, setDocId] = useState(null);
-  const [unsavedChanges, setUnsavedChanges] = useState(false);
-  const [isUpdate, setIsUpdate] = useState(false);
-
-  // All fields for Main Property Dimensions
+  // State for form data and metadata
   const [formData, setFormData] = useState({
-    // Dropdown
     mainPropertyDimensions: "", // "Internal" or "External"
-
     // Room/s in Roof
     roofFloorArea: "",
     roofRoomHeight: "",
     roofHeatLossPerimeter: "",
     roofPartyWallLength: "",
-
     // 5th Floor
     fifthFloorArea: "",
     fifthFloorHeight: "",
     fifthHeatLossPerimeter: "",
     fifthPartyWallLength: "",
-
     // 4th Floor
     fourthFloorArea: "",
     fourthFloorHeight: "",
     fourthHeatLossPerimeter: "",
     fourthPartyWallLength: "",
-
     // 3rd Floor
     thirdFloorArea: "",
     thirdFloorHeight: "",
     thirdHeatLossPerimeter: "",
     thirdPartyWallLength: "",
-
     // 2nd Floor
     secondFloorArea: "",
     secondFloorHeight: "",
     secondHeatLossPerimeter: "",
     secondPartyWallLength: "",
-
     // 1st Floor
     firstFloorArea: "",
     firstFloorHeight: "",
     firstHeatLossPerimeter: "",
     firstPartyWallLength: "",
-
     // Lowest Floor
     lowestFloorArea: "",
     lowestFloorHeight: "",
     lowestHeatLossPerimeter: "",
     lowestPartyWallLength: "",
-
-    userId: "",
-    processId: processId || "",
+    userId: user?._id || "",
+    processId: urlProcessId || "",
   });
 
-  // 1) Assign userId/processId when user or processId changes
-  useEffect(() => {
-    if (user && user._id) {
-      setFormData((prev) => ({
-        ...prev,
-        userId: user._id,
-        processId,
-      }));
-    }
-  }, [user, processId]);
+  const [formId, setFormId] = useState(null);
+  const [taskId, setTaskId] = useState(null);
+  const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const [isUpdate, setIsUpdate] = useState(false);
+  const [isViewOnly, setIsViewOnly] = useState(false);
+  const [savedProcessId, setSavedProcessId] = useState(null);
 
-  // 2) Fetch existing Form Three data for this user + process
+  // Determine mode (edit or view) and load existing data
   useEffect(() => {
-    if (user && user._id && processId) {
-      fetch(`http://localhost:3000/api/assessments/form-three?userId=${user._id}&processId=${processId}`)
+    const isViewing = location.pathname.includes("/view-form");
+    setIsViewOnly(isViewing || user.role !== "surveyor");
+    const queryTaskId = new URLSearchParams(location.search).get("taskId");
+    setTaskId(queryTaskId);
+
+    if (urlProcessId && urlProcessId !== "new") {
+      fetch(`http://localhost:3000/api/assessments/form-three?processId=${urlProcessId}`, {
+        method: "GET",
+        credentials: "include",
+      })
         .then((res) => res.json())
         .then((data) => {
-          if (data.success && data.data && data.data.length > 0) {
-            const existingForm = data.data[0];
-            setFormData(existingForm);
-            setDocId(existingForm._id);
+          if (data.success && data.data) {
+            // Data exists, populate the form
+            setFormData(data.data);
+            setFormId(data.data._id);
             setIsUpdate(true);
+            setSavedProcessId(data.data.processId);
+          } else if (isViewing) {
+            // In view mode, if no data exists, redirect to dashboard
+            toast({
+              variant: "destructive",
+              title: "Error",
+              description: "Form Three data not found.",
+            });
+            navigate("/dashboard");
+          } else {
+            // In edit mode, if no data exists, allow the surveyor to create a new form
+            setFormData((prev) => ({
+              ...prev,
+              userId: user?._id || "",
+              processId: urlProcessId,
+            }));
           }
         })
         .catch((error) => {
           toast({
             variant: "destructive",
             title: "Error",
-            description: "Error fetching saved data.",
+            description: "Failed to load Form Three data.",
           });
+          navigate("/dashboard");
           console.error("Fetch error:", error);
         });
     }
-  }, [user, processId, toast]);
+  }, [urlProcessId, user, location, toast, navigate]);
 
-  // 3) Warn user about unsaved changes when leaving the page
+  // Warn about unsaved changes in edit mode
   useEffect(() => {
     const handleBeforeUnload = (e) => {
-      if (unsavedChanges) {
+      if (unsavedChanges && !isViewOnly) {
         e.preventDefault();
-        e.returnValue = "You have unsaved changes. If you leave, your data will be lost.";
+        e.returnValue = "You have unsaved changes. Are you sure you want to leave?";
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [unsavedChanges]);
+  }, [unsavedChanges, isViewOnly]);
 
-  // 4) Handle input changes
+  // Handle input changes
   const handleChange = (e) => {
     setFormData((prev) => ({
       ...prev,
       [e.target.name]: e.target.value,
       userId: user ? user._id : "",
-      processId,
+      processId: urlProcessId,
     }));
     setUnsavedChanges(true);
   };
 
-  // 5) Save or Update the form
-  const handleSave = async () => {
+  // Save or update the form
+  const saveForm = async () => {
+    if (isViewOnly) return { success: false };
+
     try {
-      let url = "http://localhost:3000/api/assessments/form-three";
-      let method = "POST";
-      if (docId) {
-        url = `http://localhost:3000/api/assessments/form-three/${docId}`;
-        method = "PUT";
-      }
+      const url = formId
+        ? `http://localhost:3000/api/assessments/form-three/${formId}`
+        : "http://localhost:3000/api/assessments/form-three";
+      const method = formId ? "PUT" : "POST";
+
       const response = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify(formData),
       });
       const data = await response.json();
+
       if (data.success) {
-        if (!docId && data.data && data.data._id) {
-          setDocId(data.data._id);
-        }
+        setFormId(data.data._id);
+        setSavedProcessId(data.data.processId);
         setIsUpdate(true);
         setUnsavedChanges(false);
         toast({
           title: "Success",
-          description: `Form Three ${docId ? "updated" : "saved"} successfully!`,
+          description: `Form Three ${formId ? "updated" : "saved"} successfully!`,
         });
+        return { success: true, processId: data.data.processId };
       } else {
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: data.error || "Save failed",
-        });
+        throw new Error(data.error || "Failed to save Form Three");
       }
     } catch (error) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "An error occurred while saving Form Three",
+        description: error.message,
       });
       console.error("Save error:", error);
+      return { success: false, error: error.message };
     }
   };
 
-  // 6) Navigation
-  const handleNext = () => {
-    if (unsavedChanges) {
-      toast({
-        variant: "warning",
-        title: "Unsaved changes",
-        description: "Please save before proceeding.",
-      });
-      return;
+  // Handle save button click
+  const handleSave = async () => {
+    const result = await saveForm();
+    if (result.success) {
+      if (user.role !== "surveyor") {
+        navigate(`/view-form/${result.processId}/form-three?taskId=${taskId}`);
+      } else {
+        navigate(`/process/${result.processId}/form-three?taskId=${taskId}`, { replace: true });
+      }
     }
-    // Go to Form Four for the same process
-    navigate(`/process/${processId}/form-four`);
   };
 
-  const handlePrevious = () => {
-    if (unsavedChanges) {
-      toast({
-        variant: "warning",
-        title: "Unsaved changes",
-        description: "Please save before navigating back.",
-      });
-      return;
+  // Handle navigation to the next form
+  const handleNext = async () => {
+    if (!isViewOnly) {
+      const result = await saveForm();
+      if (result.success) {
+        if (user.role === "surveyor") {
+          navigate(`/process/${result.processId}/form-four?taskId=${taskId}`);
+        } else {
+          navigate(`/view-form/${result.processId}/form-four?taskId=${taskId}`);
+        }
+      }
+    } else {
+      navigate(`/view-form/${savedProcessId || urlProcessId}/form-four?taskId=${taskId}`);
     }
-    // Go back to Form Two
-    navigate(`/process/${processId}/form-two`);
+  };
+
+  // Handle navigation to the previous form
+  const handlePrevious = async () => {
+    if (!isViewOnly) {
+      const result = await saveForm();
+      if (result.success) {
+        if (user.role === "surveyor") {
+          navigate(`/process/${result.processId}/form-two?taskId=${taskId}`);
+        } else {
+          navigate(`/view-form/${result.processId}/form-two?taskId=${taskId}`);
+        }
+      }
+    } else {
+      navigate(`/view-form/${savedProcessId || urlProcessId}/form-two?taskId=${taskId}`);
+    }
   };
 
   return (
@@ -204,7 +229,9 @@ export default function FormThree() {
         transition={{ duration: 0.5 }}
         className="bg-white w-full max-w-5xl p-8 rounded-lg shadow"
       >
-        <h1 className="text-2xl font-bold mb-6 text-center">2. Main Property Dimensions</h1>
+        <h1 className="text-2xl font-bold mb-6 text-center">
+          {isViewOnly ? "View Form Three" : "2. Main Property Dimensions"}
+        </h1>
 
         {/* Dropdown: Main Property Dimensions (Internal/External) */}
         <div className="mb-6">
@@ -215,6 +242,7 @@ export default function FormThree() {
             value={formData.mainPropertyDimensions}
             onChange={handleChange}
             className="w-full mt-1 border rounded px-2 py-2"
+            disabled={isViewOnly}
           >
             <option value="">- Select -</option>
             <option value="Internal">Internal</option>
@@ -222,7 +250,6 @@ export default function FormThree() {
           </select>
         </div>
 
-        {/* We'll create a re-usable row layout for each "floor" */}
         {/* Room/s in Roof */}
         <FloorRow
           title="Room/s in Roof"
@@ -235,6 +262,7 @@ export default function FormThree() {
           partyWallName="roofPartyWallLength"
           partyWallValue={formData.roofPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* 5th Floor */}
@@ -249,6 +277,7 @@ export default function FormThree() {
           partyWallName="fifthPartyWallLength"
           partyWallValue={formData.fifthPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* 4th Floor */}
@@ -263,6 +292,7 @@ export default function FormThree() {
           partyWallName="fourthPartyWallLength"
           partyWallValue={formData.fourthPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* 3rd Floor */}
@@ -277,6 +307,7 @@ export default function FormThree() {
           partyWallName="thirdPartyWallLength"
           partyWallValue={formData.thirdPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* 2nd Floor */}
@@ -291,6 +322,7 @@ export default function FormThree() {
           partyWallName="secondPartyWallLength"
           partyWallValue={formData.secondPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* 1st Floor */}
@@ -305,6 +337,7 @@ export default function FormThree() {
           partyWallName="firstPartyWallLength"
           partyWallValue={formData.firstPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         {/* Lowest Floor */}
@@ -319,6 +352,7 @@ export default function FormThree() {
           partyWallName="lowestPartyWallLength"
           partyWallValue={formData.lowestPartyWallLength}
           onChange={handleChange}
+          disabled={isViewOnly}
         />
 
         <p className="text-sm text-gray-600 mt-4">
@@ -327,28 +361,33 @@ export default function FormThree() {
         </p>
 
         {/* Navigation Buttons */}
-        <div className="flex justify-between mt-6">
+        <div className="flex justify-between mt-6 space-x-2">
           <Button variant="outline" onClick={handlePrevious}>
             Previous
           </Button>
-          <Button onClick={handleSave}>{isUpdate ? "Update" : "Save"}</Button>
-          <Button variant="outline" onClick={handleNext}>
-            Next
-          </Button>
+          {isViewOnly ? (
+            <>
+              <Button variant="outline" onClick={() => navigate("/dashboard")}>
+                Back to Dashboard
+              </Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button onClick={handleSave}>{isUpdate ? "Update" : "Save"}</Button>
+              <Button variant="secondary" onClick={handleNext}>
+                Next
+              </Button>
+            </>
+          )}
         </div>
       </motion.div>
     </div>
   );
 }
 
-/**
- * A small helper component to render a row of floor fields.
- * title: string (e.g., "Room/s in Roof")
- * floorAreaName: string (state key)
- * floorAreaValue: string (state value)
- * ... etc.
- * onChange: function
- */
 function FloorRow({
   title,
   floorAreaName,
@@ -360,6 +399,7 @@ function FloorRow({
   partyWallName,
   partyWallValue,
   onChange,
+  disabled,
 }) {
   return (
     <div className="grid grid-cols-5 gap-4 mb-4">
@@ -374,6 +414,7 @@ function FloorRow({
           value={floorAreaValue}
           onChange={onChange}
           placeholder="e.g. 50"
+          disabled={disabled}
         />
       </div>
       <div className="col-span-1">
@@ -384,6 +425,7 @@ function FloorRow({
           value={roomHeightValue}
           onChange={onChange}
           placeholder="e.g. 2.4"
+          disabled={disabled}
         />
       </div>
       <div className="col-span-1">
@@ -394,6 +436,7 @@ function FloorRow({
           value={heatLossValue}
           onChange={onChange}
           placeholder="e.g. 30"
+          disabled={disabled}
         />
       </div>
       <div className="col-span-1">
@@ -404,6 +447,7 @@ function FloorRow({
           value={partyWallValue}
           onChange={onChange}
           placeholder="e.g. 10"
+          disabled={disabled}
         />
       </div>
     </div>
