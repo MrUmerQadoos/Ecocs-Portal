@@ -21,25 +21,23 @@ import formFourteenRoutes from "./routes/formFourteenRoutes.js";
 import formFifteenRoutes from "./routes/formFifteenRoutes.js";
 import formSixteenRoutes from "./routes/formSixteenRoutes.js";
 import formSeventeenRoutes from "./routes/formSeventeenRoutes.js";
-import formEighteenRoutes from "./routes/formEighteenRoutes.js"; // Assuming this exists
-import formNineteenRoutes from "./routes/formNineteenRoutes.js"; // Assuming this exists
-import formTwentyRoutes from "./routes/formTwentyRoutes.js"; // Assuming this exists
+import formEighteenRoutes from "./routes/formEighteenRoutes.js";
+import formNineteenRoutes from "./routes/formNineteenRoutes.js";
+import formTwentyRoutes from "./routes/formTwentyRoutes.js";
 import formTwentyOneRoutes from "./routes/formTwentyOneRoutes.js";
 import formTwentyTwoRoutes from "./routes/formTwentyTwoRoutes.js";
 import formTwentyThreeRoutes from "./routes/formTwentyThreeRoutes.js";
 import formTwentyFourRoutes from "./routes/formTwentyFourRoutes.js";
 import formTwentyFiveRoutes from "./routes/formTwentyFiveRoutes.js";
 import formTwentySixRoutes from "./routes/formTwentySixRoutes.js";
-
-
-
-
-
-
-
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import path from "path";
+import { fileURLToPath } from "url";
+
+// For ES modules, define __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -51,15 +49,25 @@ app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 app.use(cookieParser()); // Parse cookies
 
 // CORS configuration
+const allowedOrigins = [
+  "http://localhost:5173", // Development
+  "https://ecocs-portal.vercel.app", // Production
+];
 app.use(
   cors({
-    origin: "http://localhost:5173", // Frontend URL
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true, // Allow cookies and credentials
   })
 );
 
 // Serve static files from the "uploads" folder
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Connect to MongoDB
 connectToDatabase();
@@ -85,21 +93,15 @@ app.use("/api/assessments/form-fourteen", formFourteenRoutes);
 app.use("/api/assessments/form-fifteen", formFifteenRoutes);
 app.use("/api/assessments/form-sixteen", formSixteenRoutes);
 app.use("/api/assessments/form-seventeen", formSeventeenRoutes);
-app.use("/api/assessments/form-eighteen", formEighteenRoutes); // Add if exists
-app.use("/api/assessments/form-nineteen", formNineteenRoutes); // Add if exists
-app.use("/api/assessments/form-twenty", formTwentyRoutes); // Add if exists
+app.use("/api/assessments/form-eighteen", formEighteenRoutes);
+app.use("/api/assessments/form-nineteen", formNineteenRoutes);
+app.use("/api/assessments/form-twenty", formTwentyRoutes);
 app.use("/api/assessments/form-twenty-one", formTwentyOneRoutes);
 app.use("/api/assessments/form-twenty-two", formTwentyTwoRoutes);
 app.use("/api/assessments/form-twenty-three", formTwentyThreeRoutes);
 app.use("/api/assessments/form-twenty-four", formTwentyFourRoutes);
 app.use("/api/assessments/form-twenty-five", formTwentyFiveRoutes);
 app.use("/api/assessments/form-twenty-six", formTwentySixRoutes);
-
-
-
-
-
-
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -110,9 +112,5 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: "Internal Server Error" });
 });
 
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});  
-
+// Export the app for Vercel serverless functions
+export default app;
